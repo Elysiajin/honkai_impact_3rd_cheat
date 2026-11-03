@@ -1,0 +1,31 @@
+{
+  "userassembly_base_in_dump": 140728480825344,
+  "rva_metadata_body": 39146680,
+  "rva_il2cpp_version": 45138664,
+  "rva_metadata_header_blob": 39146672,
+  "il2cpp_version": 7,
+  "class_struct_size": 216,
+  "class_layout": {
+    "+0x20": "const char* name",
+    "+0x58": "per-module codegen table base",
+    "+0x88": "typeDefinitionIndex",
+    "+0x98": "typeDefinitionIndex (copy)",
+    "+0xB0": "low32 = parent class, high32 = flags"
+  },
+  "methodinfo_struct_size": 64,
+  "methodinfo_layout": {
+    "+0x00": "generic method pointer (usually 0)",
+    "+0x08": "methodPointer",
+    "+0x10": "klass",
+    "+0x18": "slot index",
+    "+0x20": "invoker",
+    "+0x28": "0x00000000ffffffff",
+    "+0x30": "MethodDef token 0x06xxxxxx",
+    "+0x38": "flags"
+  },
+  "counts": {
+    "classes": 76053,
+    "methods": 132607,
+    "classes_with_methods": 10955
+  }
+}

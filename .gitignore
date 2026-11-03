@@ -1,0 +1,11 @@
+# 大体积生成物
+sdk/bh3_dump.cs
+sdk/bh3_fields.tsv
+sdk/bh3_methods_named.tsv
+
+# 运行时日志 / 临时文件
+*.log
+out/
+*.tmp
+sdk/sdk.rar
+sdk.rar
