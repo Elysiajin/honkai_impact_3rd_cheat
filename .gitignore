@@ -9,3 +9,8 @@ out/
 *.tmp
 sdk/sdk.rar
 sdk.rar
+
+# build temp
+build.log
+overlay/build.log
+__pycache__/

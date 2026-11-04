@@ -4,15 +4,15 @@
 #include <dxgi.h>
 
 #include <atomic>
+#include <cmath>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <string>
-#include <vector>
 #include <thread>
-#include <cstdio>
-#include <cstdarg>
-#include <cstring>
-#include <cstdint>
-#include <cmath>
+#include <vector>
 
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
@@ -20,6 +20,10 @@
 
 #include "ov_data.h"
 #include "ov_native.h"
+
+#include "ui/App.h"
+#include "ui/State.h"
+#include "ui/UiCore.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -62,7 +66,6 @@ typedef HRESULT(STDMETHODCALLTYPE* PresentFn)(IDXGISwapChain*, UINT, UINT);
 
 static HMODULE                  g_self = nullptr;
 static std::atomic<bool>        g_unhook{ false };
-static std::atomic<bool>        g_menu_open{ true };
 
 static uintptr_t                g_present_slot = 0;
 static PresentFn                g_present_orig = nullptr;
@@ -82,34 +85,19 @@ static ov::Data                 g_data;
 static bool                     g_data_ready = false;
 static std::mutex               g_data_mtx;
 
-static std::atomic<bool>        g_esp_on{ true };
-static std::atomic<bool>        g_esp_name{ true };
-static std::atomic<bool>        g_esp_dist{ true };
-static std::atomic<bool>        g_god{ false };
-static std::atomic<bool>        g_kill_req{ false };
-static int                      g_kill_count = 0;
-static float                    g_esp_h = 1.7f;
-static float                    g_max_dist = 300.0f;
-static float                    g_esp_col[4] = { 1.0f, 0.40f, 0.40f, 1.0f };
-static int                      g_drawn = 0;
-
 static ovn::State               g_nv;
 static std::mutex               g_nv_mtx;
 static std::atomic<bool>        g_god_state{ false };
 
-static std::vector<std::string> g_logs;
-static std::mutex               g_log_mtx;
 static void logf(const char* fmt, ...) {
     char buf[512];
     va_list ap; va_start(ap, fmt);
     _vsnprintf(buf, sizeof buf - 1, fmt, ap);
     va_end(ap);
     buf[sizeof buf - 1] = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_log_mtx);
-        if (g_logs.size() > 400) g_logs.erase(g_logs.begin(), g_logs.begin() + 150);
-        g_logs.push_back(buf);
-    }
+
+    ui::LogPush(buf);
+
     OutputDebugStringA(buf);
     OutputDebugStringA("\n");
     FILE* f = fopen("D:\\My Projects\\Honkai Impact\\overlay\\bh3_overlay.log", "a");
@@ -126,9 +114,39 @@ static WNDPROC orig_of(HWND h) {
     return nullptr;
 }
 
+static bool is_mouse_msg(UINT m) {
+    switch (m) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_XBUTTONDBLCLK:
+    case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
+    case WM_SETCURSOR:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool is_key_msg(UINT m) {
+    switch (m) {
+    case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+    case WM_CHAR:    case WM_SYSCHAR: case WM_UNICHAR: case WM_DEADCHAR:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static LRESULT CALLBACK hk_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(h, msg, wp, lp))
-        return 1;
+    const bool vis = ui::AppVisible();
+    if (vis && ImGui::GetCurrentContext())
+        ImGui_ImplWin32_WndProcHandler(h, msg, wp, lp);
+
+    if (vis && (is_mouse_msg(msg) || is_key_msg(msg)))
+        return 0;
+
     WNDPROC o = orig_of(h);
     return o ? CallWindowProcW(o, h, msg, wp, lp) : DefWindowProcW(h, msg, wp, lp);
 }
@@ -161,7 +179,13 @@ static void install_wndproc() {
 static void tick_render_thread() {
     static uint64_t last_nv = 0, last_god = 0, last_log = 0;
     if (!g_data_ready) return;
+
+    ui::Settings& cfg = ui::Cfg();
+    ui::Status&   st  = ui::St();
+    ui::Requests& rq  = ui::Req();
+
     uint64_t now = GetTickCount64();
+
     if (now - last_nv >= 200) {
         last_nv = now;
         ovn::State s;
@@ -170,6 +194,21 @@ static void tick_render_thread() {
             std::lock_guard<std::mutex> lk(g_nv_mtx);
             g_nv = s;
         }
+
+        st.avatar_mgr  = s.avatar_mgr;
+        st.monster_mgr = s.monster_mgr;
+        st.avatar_n    = (int)s.avatars.size();
+        st.monster_n   = (int)s.monsters.size();
+        st.cam_ok      = s.cam_ok;
+        st.camera      = s.camera;
+        st.cam_w       = s.w;
+        st.cam_h       = s.h;
+        snprintf(st.cam_msg, sizeof st.cam_msg, "%s", s.msg);
+        st.stamp       = s.t;
+        st.data_ready  = g_data_ready;
+        st.class_count = g_data.count;
+        st.ua          = g_data.ua;
+
         if (now - last_log >= 3000) {
             last_log = now;
             logf("[*] 怪 %zu 角色 %zu 相机 %s  avatar=%p monster=%p",
@@ -177,23 +216,39 @@ static void tick_render_thread() {
                  (void*)s.avatar_mgr, (void*)s.monster_mgr);
         }
     }
+
     if (now - last_god >= 60) {
         last_god = now;
-        bool want = g_god.load();
+        bool want = cfg.god;
         if (want != g_god_state.load()) {
             bool ok = ovn::god_mode(g_data, want);
             if (ok) g_god_state = want;
+            st.god_applied = g_god_state.load();
             logf("[*] 无敌 %s (%s)", want ? "开" : "关", ok ? "ok" : "patch 失败");
         }
     }
-    if (g_kill_req.exchange(false)) {
+
+    if (rq.kill_all) {
+        rq.kill_all = false;
         ovn::State s;
         {
             std::lock_guard<std::mutex> lk(g_nv_mtx);
             s = g_nv;
         }
-        g_kill_count = ovn::kill_all(g_data, s);
-        logf("[*] 秒杀：对 %d 个怪物调 DieNow", g_kill_count);
+        int n = ovn::kill_all(g_data, s);
+        st.kill_count += n;
+        logf("[*] 秒杀：对 %d 个怪物调 DieNow", n);
+    }
+
+    if (rq.rescan) {
+        rq.rescan = false;
+        std::lock_guard<std::mutex> lk(g_data_mtx);
+        if (g_data.init()) {
+            g_data_ready = true;
+            logf("[+] 重新索引完成: %d 个类", g_data.count);
+        } else {
+            logf("[-] 重新索引失败: %s", g_data.last_error);
+        }
     }
 }
 
@@ -248,38 +303,36 @@ static bool init_gui(IDXGISwapChain* sc) {
     io.LogFilename = nullptr;
     io.MouseDrawCursor = true;
 
-    const char* fonts[] = {
-        "C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\msyh.ttf",
-        "C:\\Windows\\Fonts\\msyhbd.ttc", "C:\\Windows\\Fonts\\simhei.ttf",
-        "C:\\Windows\\Fonts\\simsun.ttc", "C:\\Windows\\Fonts\\deng.ttf"
-    };
-    bool font_ok = false;
-    for (const char* fp : fonts) {
-        if (GetFileAttributesA(fp) == INVALID_FILE_ATTRIBUTES) continue;
-        ImFontConfig cfg;
-        cfg.OversampleH = 2; cfg.OversampleV = 1; cfg.PixelSnapH = true;
-        if (io.Fonts->AddFontFromFileTTF(fp, 17.0f, &cfg, io.Fonts->GetGlyphRangesChineseSimplifiedCommon())) {
-            font_ok = true;
-            logf("[+] 字体: %s", fp);
-            break;
+    {
+        char err[256] = { 0 };
+        bool ok = ui::BuildFonts(io.Fonts, 1.0f, err, (int)sizeof err);
+        if (ok) {
+            const ui::FontSet& fs = ui::Fonts();
+            logf("[+] 字体: %s%s", fs.path, fs.cjk ? "" : " (非中文, 已回退默认)");
+        } else {
+            logf("[!] 字体加载失败: %s", err[0] ? err : "未知原因");
         }
     }
-    if (!font_ok) { io.Fonts->AddFontDefault(); logf("[!] 没找到中文字体"); }
 
-    ImGui::StyleColorsDark();
-    ImGui::GetStyle().WindowRounding = 6.0f;
-    ImGui::GetStyle().FrameRounding = 4.0f;
+    ui::ApplyTheme();
 
     if (!ImGui_ImplWin32_Init(g_hwnd)) { logf("[-] ImGui_ImplWin32_Init 失败"); g_gui_failed = true; return false; }
     install_wndproc();
     if (!ImGui_ImplDX11_Init(g_dev, g_ctx)) { logf("[-] ImGui_ImplDX11_Init 失败"); g_gui_failed = true; return false; }
+
+    ui::AppInit();
     g_gui_ready = true;
-    logf("[+] ImGui 就绪 %dx%d", (int)g_sw, (int)g_sh);
+    logf("[+] ImGui 就绪 %dx%d (%.2fx 缩放)", (int)g_sw, (int)g_sh, ui::UiScale());
     return true;
 }
 
 static void draw_esp() {
-    if (!g_esp_on.load()) return;
+    const ui::Settings& cfg = ui::Cfg();
+    if (!cfg.esp_on) {
+        ui::St().esp_drawn = 0;
+        return;
+    }
+
     ovn::State s;
     {
         std::lock_guard<std::mutex> lk(g_nv_mtx);
@@ -289,17 +342,22 @@ static void draw_esp() {
 
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImU32 col = ImGui::ColorConvertFloat4ToU32(
-        ImVec4(g_esp_col[0], g_esp_col[1], g_esp_col[2], g_esp_col[3]));
+        ImVec4(cfg.esp_col[0], cfg.esp_col[1], cfg.esp_col[2], cfg.esp_col[3]));
     const ImU32 shadow = IM_COL32(0, 0, 0, 170);
-    const bool show_name = g_esp_name.load();
-    const bool show_dist = g_esp_dist.load();
-    const float maxd = g_max_dist;
+    const bool show_box  = cfg.esp_box;
+    const bool show_name = cfg.esp_name;
+    const bool show_dist = cfg.esp_dist;
+    const float maxd = cfg.max_dist;
+    const float esp_h = cfg.esp_h;
+
+    ImFont* f = ui::Fonts().small ? ui::Fonts().small : ImGui::GetFont();
+    const float fsz = f ? f->FontSize : ImGui::GetFontSize();
 
     int drawn = 0;
     for (const auto& e : s.monsters) {
         float sx = 0, sy = 0, hx = 0, hy = 0;
         if (!ovn::w2s(s.vp, e.x, e.y, e.z, s.w, s.h, sx, sy)) continue;
-        if (!ovn::w2s(s.vp, e.x, e.y + g_esp_h, e.z, s.w, s.h, hx, hy)) continue;
+        if (!ovn::w2s(s.vp, e.x, e.y + esp_h, e.z, s.w, s.h, hx, hy)) continue;
         float bh = sy - hy;
         if (bh < 4.0f || bh > s.h) continue;
         float bw = bh * 0.45f;
@@ -313,110 +371,33 @@ static void draw_esp() {
         }
         if (show_dist && dist > maxd) continue;
 
-        dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(b.x + 1, b.y + 1), shadow, 0, 0, 3.0f);
-        dl->AddRect(a, b, col, 0, 0, 1.5f);
+        if (show_box) {
+            dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(b.x + 1, b.y + 1), shadow, 0, 0, 3.0f);
+            dl->AddRect(a, b, col, 0, 0, 1.5f);
+        }
         if (show_name) {
             char line[160];
             if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", e.name.c_str(), dist);
             else           snprintf(line, sizeof line, "%s", e.name.c_str());
-            dl->AddText(ImVec2(a.x, a.y - 16), col, line);
+            dl->AddText(f, fsz, ImVec2(a.x, a.y - fsz - 2.0f), col, line);
         }
         if (++drawn >= 400) break;
     }
-    g_drawn = drawn;
+    ui::St().esp_drawn = drawn;
 }
 
-static double g_fps = 0;
-static uint64_t g_frames = 0;
-
-static void ui_func() {
-    ovn::State st;
-    {
-        std::lock_guard<std::mutex> lk(g_nv_mtx);
-        st = g_nv;
+static void update_fps() {
+    static uint64_t t0 = 0;
+    static uint64_t frames = 0;
+    ++frames;
+    uint64_t t1 = GetTickCount64();
+    if (!t0) t0 = t1;
+    if (t1 - t0 >= 500) {
+        ui::Status& st = ui::St();
+        st.fps      = (float)((double)(frames * 1000) / (double)(t1 - t0));
+        st.frame_ms = st.fps > 0.5f ? 1000.0 / (double)st.fps : 0.0;
+        frames = 0; t0 = t1;
     }
-
-    ImGui::TextColored(st.cam_ok ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 0.7f, 0.3f, 1),
-                       "%s", st.msg);
-    ImGui::SameLine();
-    ImGui::TextDisabled("| %.0f FPS", g_fps);
-    ImGui::Separator();
-
-    bool esp = g_esp_on.load();
-    if (ImGui::Checkbox("ESP 绘制", &esp)) g_esp_on = esp;
-    ImGui::SameLine();
-    bool nm = g_esp_name.load();
-    if (ImGui::Checkbox("显示名称", &nm)) g_esp_name = nm;
-    ImGui::SameLine();
-    bool ds = g_esp_dist.load();
-    if (ImGui::Checkbox("显示距离", &ds)) g_esp_dist = ds;
-
-    ImGui::ColorEdit4("方框颜色", g_esp_col, ImGuiColorEditFlags_NoInputs);
-    ImGui::SetNextItemWidth(200);
-    ImGui::SliderFloat("人物高度(m)", &g_esp_h, 1.0f, 2.4f, "%.2f");
-    ImGui::SetNextItemWidth(200);
-    ImGui::SliderFloat("最远距离(m)", &g_max_dist, 20.0f, 2000.0f, "%.0f");
-    ImGui::TextDisabled("怪物 %zu，角色 %zu，实际绘制 %d", st.monsters.size(), st.avatars.size(), g_drawn);
-
-    ImGui::Separator();
-
-    bool god = g_god.load();
-    if (ImGui::Checkbox("无敌（hook BaseMonoAvatar.BeHit）", &god)) {
-        g_god = god;
-        logf("[*] 无敌 %s", god ? "开" : "关");
-    }
-    ImGui::SameLine();
-    ImGui::TextColored(g_god_state.load() ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 0.7f, 0.3f, 1),
-                       "%s", g_god_state.load() ? "已生效" : "未生效");
-
-    if (ImGui::Button("秒杀全部怪物", ImVec2(150, 0))) {
-        g_kill_req = true;
-        logf("[*] 请求秒杀");
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("上次处理 %d 个", g_kill_count);
-
-    ImGui::Separator();
-
-    if (ImGui::CollapsingHeader("运行状态")) {
-        ImGui::Text("UserAssembly %p", (void*)g_data.ua);
-        ImGui::Text("AvatarManager  %p", (void*)st.avatar_mgr);
-        ImGui::Text("MonsterManager %p", (void*)st.monster_mgr);
-        ImGui::Text("Camera         %p", (void*)st.camera);
-        ImGui::Text("类总数 %d", g_data.count);
-    }
-    ImGui::TextDisabled("热键：INSERT 菜单   F3 ESP   F5 秒杀   F6 无敌");
-}
-
-static void ui_logs() {
-    if (ImGui::Button("清空")) { std::lock_guard<std::mutex> lk(g_log_mtx); g_logs.clear(); }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%zu 条", g_logs.size());
-    ImGui::Separator();
-    ImGui::BeginChild("log", ImVec2(0, 0), true);
-    {
-        std::lock_guard<std::mutex> lk(g_log_mtx);
-        for (auto& s : g_logs) ImGui::TextUnformatted(s.c_str());
-    }
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4) ImGui::SetScrollHereY(1.0f);
-    ImGui::EndChild();
-}
-
-static void draw_ui() {
-    if (!g_menu_open.load()) return;
-    static bool win_open = true;
-    win_open = true;
-    ImGui::SetNextWindowSize(ImVec2(520, 470), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(70, 70), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("崩坏3 · BH3##main", &win_open, ImGuiWindowFlags_None)) {
-        if (ImGui::BeginTabBar("tabs")) {
-            if (ImGui::BeginTabItem("功能区")) { ui_func(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("日志"))   { ui_logs(); ImGui::EndTabItem(); }
-            ImGui::EndTabBar();
-        }
-    }
-    ImGui::End();
-    if (!win_open) g_menu_open = false;
 }
 
 static HRESULT STDMETHODCALLTYPE hk_present(IDXGISwapChain* sc, UINT sync, UINT flags) {
@@ -433,17 +414,18 @@ static HRESULT STDMETHODCALLTYPE hk_present(IDXGISwapChain* sc, UINT sync, UINT 
             bool pressed = down && !pk[i];
             pk[i] = down;
             if (!pressed) continue;
+            ui::Settings& cfg = ui::Cfg();
             if (keys[i] == VK_INSERT) {
-                g_menu_open = !g_menu_open;
+                ui::AppSetVisible(!ui::AppVisible());
+                logf("[*] 界面 %s", ui::AppVisible() ? "显示" : "隐藏");
             } else if (keys[i] == VK_F3) {
-                g_esp_on = !g_esp_on.load();
-                logf("[*] ESP %s", g_esp_on.load() ? "开" : "关");
+                cfg.esp_on = !cfg.esp_on;
+                logf("[*] ESP %s", cfg.esp_on ? "开" : "关");
             } else if (keys[i] == VK_F5) {
-                g_kill_req = true;
+                ui::Req().kill_all = true;
             } else if (keys[i] == VK_F6) {
-                bool v = !g_god.load();
-                g_god = v;
-                logf("[*] 无敌 %s", v ? "开" : "关");
+                cfg.god = !cfg.god;
+                logf("[*] 无敌 %s", cfg.god ? "开" : "关");
             }
         }
 
@@ -452,23 +434,24 @@ static HRESULT STDMETHODCALLTYPE hk_present(IDXGISwapChain* sc, UINT sync, UINT 
 
         if (ensure_rtv(sc)) {
             ImGuiIO& io = ImGui::GetIO();
-            if (!g_menu_open.load()) { io.WantCaptureMouse = false; io.WantCaptureKeyboard = false; }
-            io.MouseDrawCursor = g_menu_open.load();
+            const bool vis = ui::AppVisible();
+            if (!vis) { io.WantCaptureMouse = false; io.WantCaptureKeyboard = false; }
+            io.MouseDrawCursor = vis;
+
+            static uint64_t last_tick = 0;
+            uint64_t now = GetTickCount64();
+            float dt = last_tick ? (float)(now - last_tick) / 1000.0f : (1.0f / 60.0f);
+            last_tick = now;
+            if (dt <= 0.0f) dt = 1.0f / 60.0f;
 
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
 
-            static uint64_t t0 = 0; uint64_t t1 = GetTickCount64();
-            ++g_frames;
-            if (!t0) t0 = t1;
-            if (t1 - t0 >= 500) {
-                g_fps = (double)(g_frames * 1000) / (double)(t1 - t0);
-                g_frames = 0; t0 = t1;
-            }
+            update_fps();
 
             draw_esp();
-            draw_ui();
+            if (vis) ui::AppFrame(dt);
 
             ImGui::Render();
 
@@ -551,6 +534,9 @@ static void boot() {
             std::lock_guard<std::mutex> lk(g_data_mtx);
             if (g_data.init()) {
                 g_data_ready = true;
+                ui::St().data_ready = true;
+                ui::St().class_count = g_data.count;
+                ui::St().ua = g_data.ua;
                 logf("[+] SDK 就绪: %d 个类 UA=%p String=%p",
                      g_data.count, (void*)g_data.ua, (void*)g_data.str_klass);
                 break;

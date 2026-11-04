@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// ov_native.h — 按 SDK 的已验证链路直接读游戏对象/调游戏函数
-// 链路（战斗场景实测）：
-//   *(UA+0x2641588) -> MethodInfo -> klass(+8) -> klass+0x18 -> +0x10 -> +0x30 -> [E] = AvatarManager
-//   *(UA+0x2642EA8) 同链 = MonsterManager
-//   AvatarManager+0x50 / MonsterManager+0x18 = List
-//   List: +0x10 items, +0x18 size, 数组 +0x20 元素；对象 +0x00 klass，klass+0x20 名字
-//   怪物坐标 +0x734
-// ---------------------------------------------------------------------------
 #pragma once
 #include "ov_data.h"
 
@@ -100,7 +91,6 @@ inline void fill_ents(ov::Data& d, const std::vector<uintptr_t>& ps, std::vector
     }
 }
 
-// 列主序，R = A * B
 inline void mul_m4(const float A[16], const float B[16], float R[16]) {
     for (int c = 0; c < 4; ++c)
         for (int r = 0; r < 4; ++r) {
@@ -171,7 +161,6 @@ inline void refresh(ov::Data& d, State& s) {
     if (!s.ready) lstrcpyA(s.msg, "管理器链为空（还没进关卡？）");
 }
 
-// ------------------------------------------------------------------ 无敌 hook
 static uint8_t g_behit_backup[12] = { 0 };
 static bool g_behit_on = false;
 
@@ -213,4 +202,4 @@ inline int kill_all(ov::Data& d, const State& s) {
     return n;
 }
 
-} // namespace ovn
+}

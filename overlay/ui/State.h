@@ -1,0 +1,97 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
+
+namespace ui
+{
+
+struct Settings
+{
+    bool  esp_on    = true;
+    bool  esp_name  = true;
+    bool  esp_dist  = true;
+    bool  esp_box   = true;
+    bool  god       = false;
+
+    float esp_h     = 1.7f;
+    float max_dist  = 300.0f;
+    float esp_col[4] = { 1.00f, 0.40f, 0.40f, 1.00f };
+
+    float ui_scale  = 1.0f;
+    bool  anim_on   = true;
+    bool  show_grid = true;
+    int   page      = 0;
+    bool  log_auto  = true;
+};
+
+Settings& Cfg();
+
+struct Status
+{
+    bool     data_ready   = false;
+    int      class_count  = 0;
+    uintptr_t ua          = 0;
+    uintptr_t avatar_mgr  = 0;
+    uintptr_t monster_mgr = 0;
+    int      avatar_n     = 0;
+    int      monster_n    = 0;
+
+    bool     cam_ok       = false;
+    uintptr_t camera      = 0;
+    float    cam_w        = 0.0f;
+    float    cam_h        = 0.0f;
+    char     cam_msg[160] = { 0 };
+
+    float    fps          = 0.0f;
+    double   frame_ms     = 0.0;
+    int      esp_drawn    = 0;
+    int      kill_count   = 0;
+    bool     god_applied  = false;
+    uint64_t stamp        = 0;
+};
+
+Status& St();
+
+struct Requests
+{
+    bool kill_all  = false;
+    bool rescan    = false;
+};
+
+Requests& Req();
+
+constexpr int kLogCap = 400;
+
+void        LogPush(const char* line);
+void        LogClear();
+int         LogCount();
+
+class LogScope
+{
+public:
+    LogScope();
+    ~LogScope();
+    int Count() const;
+    const char* At(int i) const;
+
+    LogScope(const LogScope&) = delete;
+    LogScope& operator=(const LogScope&) = delete;
+
+private:
+    std::unique_lock<std::mutex> lk_;
+    int count_ = 0;
+};
+
+void  Toast(const char* msg);
+void  Toastf(const char* fmt, ...);
+void  ToastTick(float dt);
+int   ToastList(const char** out, float* alpha, int cap);
+
+const char* AppVersion();
+const char* AppBuildTime();
+
+void StateInit();
+
+}
