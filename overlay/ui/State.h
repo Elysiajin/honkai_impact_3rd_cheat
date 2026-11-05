@@ -22,6 +22,10 @@ struct Settings
     float max_dist  = 300.0f;
     float esp_col[4] = { 1.00f, 0.40f, 0.40f, 1.00f };
 
+    float esp_font  = 20.0f;
+    bool  esp_bold  = true;
+    float esp_off   = 6.0f;
+
     float ui_scale  = 1.0f;
     bool  anim_on   = true;
     bool  show_grid = true;

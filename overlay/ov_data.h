@@ -131,6 +131,25 @@ public:
         return false;
     }
 
+    bool read_il2str(uintptr_t obj, uintptr_t off, char* out, size_t cap) const {
+        if (!out || cap < 2) return false;
+        out[0] = 0;
+        uintptr_t str = 0;
+        if (!obj || !rd(obj + off, str) || !str) return false;
+        int32_t len = 0;
+        if (!rd(str + 0x10, len) || len <= 0 || len > 96) return false;
+        size_t n = (size_t)len;
+        if (n >= cap) n = cap - 1;
+        for (size_t i = 0; i < n; ++i) {
+            uint16_t ch = 0;
+            if (!rd(str + 0x14 + i * 2, ch)) { out[0] = 0; return false; }
+            if (ch < 0x20 || ch > 0x7E) { out[0] = 0; return false; }
+            out[i] = (char)ch;
+        }
+        out[n] = 0;
+        return n != 0;
+    }
+
     bool build_index();
 
 private:

@@ -1,6 +1,7 @@
 #include "UiCore.h"
 #include "imgui_internal.h"
 #include "_icon_data.h"
+#include "_ranges.inc"
 
 #include <cstdio>
 #include <cstring>
@@ -13,14 +14,39 @@ ImFont* ubu_2       = nullptr;
 ImFont* ubu_child   = nullptr;
 ImFont* ubu_preview = nullptr;
 ImFont* cruin_0     = nullptr;
+ImFont* esp_s       = nullptr;
+ImFont* esp_m       = nullptr;
+ImFont* esp_l       = nullptr;
 
 namespace ui
 {
 
-static const ImWchar kRanges[] = {
-#include "_ranges.inc"
+static const ImWchar kExtraRanges[] = {
+    0x0020, 0x00FF,   // 基本拉丁
+    0x2000, 0x206F,   // 通用标点
+    0x2190, 0x21FF,   // 箭头
+    0x2200, 0x22FF,   // 数学运算符
+    0x2500, 0x25FF,   // 几何图形
+    0x2600, 0x27BF,   // 杂项符号
+    0x3000, 0x303F,   // 中日韩标点
+    0xFF00, 0xFFEF,   // 全角字符
     0x0000
 };
+
+// 常用汉字走 ImGui 内置的 2500 字表，再并入界面实际用字与符号段
+static const ImWchar* RangeTable(ImFontAtlas* atlas)
+{
+    static ImVector<ImWchar> out;
+    if (out.empty())
+    {
+        ImFontGlyphRangesBuilder b;
+        if (atlas) b.AddRanges(atlas->GetGlyphRangesChineseSimplifiedCommon());
+        b.AddRanges(kExtraRanges);
+        b.AddText(kUiGlyphs);
+        b.BuildRanges(&out);
+    }
+    return out.Data;
+}
 
 static const ImWchar kIconRanges[] = {
     0x0020, 0x0020,
@@ -42,7 +68,13 @@ float S()       { return g_scale; }
 float Dt() { return g_dt; }
 void  SetDt(float dt) { g_dt = (dt > 0.0f && dt < 0.25f) ? dt : (1.0f / 60.0f); }
 
-static const char* kFontFile = "C:\\Users\\HP\\Downloads\\zh-cn.ttf";
+// 优先用项目自带字体，其余为运行环境兜底
+static const char* kFontCandidates[] = {
+    "D:\\My Projects\\Honkai Impact\\zh-cn.ttf",
+    "zh-cn.ttf",
+    "C:\\Windows\\Fonts\\hpsimplifiedhans-regular.ttf",
+};
+static const char* g_cjk_path = nullptr;
 
 static bool FileExists(const char* p)
 {
@@ -53,14 +85,40 @@ static bool FileExists(const char* p)
     return true;
 }
 
+static const char* FindCjkFont()
+{
+    for (const char* p : kFontCandidates)
+        if (FileExists(p)) return p;
+    return nullptr;
+}
+
 static ImFont* AddCjk(ImFontAtlas* atlas, float px)
 {
+    if (!g_cjk_path) return nullptr;
     ImFontConfig cfg;
     cfg.SizePixels  = px;
     cfg.OversampleH = (px >= 22.0f) ? 1 : 2;
     cfg.OversampleV = 1;
     cfg.PixelSnapH  = true;
-    return atlas->AddFontFromFileTTF(kFontFile, px, &cfg, kRanges);
+    return atlas->AddFontFromFileTTF(g_cjk_path, px, &cfg, RangeTable(atlas));
+}
+
+// 按字号就近取 ESP 专用字体
+ImFont* EspFont(float px)
+{
+    ImFont* best = esp_m ? esp_m : (ubu_1 ? ubu_1 : ImGui::GetFont());
+    if (!best) return nullptr;
+    if (!esp_s || !esp_m || !esp_l) return best;
+
+    float d0 = px - esp_s->FontSize; if (d0 < 0) d0 = -d0;
+    float d1 = px - esp_m->FontSize; if (d1 < 0) d1 = -d1;
+    float d2 = px - esp_l->FontSize; if (d2 < 0) d2 = -d2;
+
+    ImFont* pick = esp_m;
+    float d = d1;
+    if (d0 < d) { d = d0; pick = esp_s; }
+    if (d2 < d) { pick = esp_l; }
+    return pick;
 }
 
 static ImFont* AddIcon(ImFontAtlas* atlas, float px)
@@ -99,16 +157,19 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap)
     // Context recreation frees the previous atlas and every font in it.
     ico_0 = ico_1 = nullptr;
     ubu_0 = ubu_1 = ubu_2 = ubu_child = ubu_preview = cruin_0 = nullptr;
+    esp_s = esp_m = esp_l = nullptr;
 
-    if (!FileExists(kFontFile))
+    g_cjk_path = FindCjkFont();
+    if (!g_cjk_path)
     {
-        if (err && err_cap) snprintf(err, (size_t)err_cap, "missing %s", kFontFile);
+        if (err && err_cap) snprintf(err, (size_t)err_cap, "missing zh-cn.ttf");
         atlas->AddFontDefault();
         if (!atlas->Fonts.empty())
         {
             g_fonts.body = g_fonts.small = g_fonts.tiny = atlas->Fonts[0];
             g_fonts.display = g_fonts.title = g_fonts.button = atlas->Fonts[0];
             ubu_0 = ubu_1 = ubu_2 = ubu_child = ubu_preview = cruin_0 = atlas->Fonts[0];
+            esp_s = esp_m = esp_l = atlas->Fonts[0];
         }
         return false;
     }
@@ -121,6 +182,11 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap)
     cruin_0     = ubu_1;
     g_fonts.display = AddCjk(atlas, 30.0f * scale);
 
+    // ESP 名称专用三档字号
+    esp_s = AddCjk(atlas, 16.0f * scale);
+    esp_m = AddCjk(atlas, 24.0f * scale);
+    esp_l = AddCjk(atlas, 36.0f * scale);
+
     ico_0 = AddIcon(atlas, 20.0f * scale);
     ico_1 = AddIcon(atlas, 26.0f * scale);
 
@@ -130,12 +196,12 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap)
     g_fonts.small  = ubu_preview;
     g_fonts.tiny   = ubu_preview;
     g_fonts.cjk    = (ubu_child != nullptr);
-    snprintf(g_fonts.path, sizeof g_fonts.path, "%s", kFontFile);
+    snprintf(g_fonts.path, sizeof g_fonts.path, "%s", g_cjk_path ? g_cjk_path : "");
     g_fonts.icon_path = "icon";
 
     if (err && err_cap)
     {
-        if (g_fonts.cjk) snprintf(err, (size_t)err_cap, "ok %s", kFontFile);
+        if (g_fonts.cjk) snprintf(err, (size_t)err_cap, "ok %s", g_cjk_path);
         else             snprintf(err, (size_t)err_cap, "load failed");
     }
     return g_fonts.cjk;

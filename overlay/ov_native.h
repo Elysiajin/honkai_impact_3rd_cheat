@@ -21,9 +21,11 @@ static const uint32_t RVA_DIE_NOW = 0x51E5960;
 static const uint32_t RVA_BEHIT = 0x4A73910;
 
 static const uint32_t RVA_IS_SP_ENOUGH = 0x8011F70;
-static const uint32_t RVA_IS_SKILL_IN_CD = 0x8013070;
 static const uint32_t RVA_GET_SKILL_CD = 0x8009530;
 static const uint32_t RVA_IS_SKILL_HAS_CD = 0x80152A0;
+static const uint32_t RVA_UI_IS_SKILL_IN_CD = 0x730B300;
+static const uint32_t RVA_UI_CAN_USE_SKILL = 0x730B200;
+static const uint32_t RVA_AVATAR_CAN_USE_SKILL = 0x4A6ADC0;
 
 static const uint32_t ULTRA_OVERRIDES[] = {
     0x9BAE670, 0x9DD97D0, 0x863B560, 0x863BF90, 0x76C3560, 0x9BAF090,
@@ -37,7 +39,8 @@ static const uint32_t G_MONSTER_MGR = 0x2642EA8;
 struct Ent {
     uintptr_t p = 0;
     uintptr_t k = 0;
-    std::string name;
+    std::string name;   // 类名
+    std::string label;  // 可读名
     float x = 0, y = 0, z = 0;
 };
 
@@ -92,7 +95,26 @@ inline bool read_list(ov::Data& d, uintptr_t list, std::vector<uintptr_t>& out, 
     return true;
 }
 
-inline void fill_ents(ov::Data& d, const std::vector<uintptr_t>& ps, std::vector<Ent>& out) {
+inline void monster_label(ov::Data& d, uintptr_t p, const std::string& fallback, std::string& out) {
+    char id[64] = {}, arch[64] = {}, beh[64] = {};
+    const bool have_id = d.read_il2str(p, 0x2C0, id, sizeof id);
+    const bool have_arch = d.read_il2str(p, 0x878, arch, sizeof arch);
+    if (have_id && have_arch) {
+        out.assign(id);
+        out.push_back(' ');
+        out.append(arch);
+    } else if (have_id) {
+        out.assign(id);
+    } else if (have_arch) {
+        out.assign(arch);
+    } else if (d.read_il2str(p, 0x830, beh, sizeof beh)) {
+        out.assign(beh);
+    } else {
+        out = fallback;
+    }
+}
+
+inline void fill_ents(ov::Data& d, const std::vector<uintptr_t>& ps, std::vector<Ent>& out, bool monster) {
     out.clear();
     if (out.capacity() < ps.size()) out.reserve(ps.size());
     for (uintptr_t p : ps) {
@@ -100,6 +122,8 @@ inline void fill_ents(ov::Data& d, const std::vector<uintptr_t>& ps, std::vector
         e.p = p;
         if (!d.rd(p, e.k) || !e.k) continue;
         e.name = d.name_of(e.k);
+        if (monster) monster_label(d, p, e.name, e.label);
+        else e.label = e.name;
         if (!d.rd(p + 0x734, e.x)) continue;
         if (!d.rd(p + 0x738, e.y)) continue;
         if (!d.rd(p + 0x73C, e.z)) continue;
@@ -216,7 +240,7 @@ inline void refresh_ents(ov::Data& d, State& s) {
         uintptr_t lst = 0;
         if (d.rd(s.avatar_mgr + 0x50, lst)) {
             read_list(d, lst, ps);
-            fill_ents(d, ps, s.avatars);
+            fill_ents(d, ps, s.avatars, false);
         } else {
             s.avatars.clear();
         }
@@ -228,7 +252,7 @@ inline void refresh_ents(ov::Data& d, State& s) {
         uintptr_t lst = 0;
         if (d.rd(s.monster_mgr + 0x18, lst)) {
             read_list(d, lst, ps);
-            fill_ents(d, ps, s.monsters);
+            fill_ents(d, ps, s.monsters, true);
         } else {
             s.monsters.clear();
         }
@@ -256,8 +280,12 @@ static uint8_t g_ultra_bak[ULTRA_OVERRIDE_N][3] = {};
 static bool g_ultra_on[ULTRA_OVERRIDE_N] = {};
 static uint8_t g_sp_bak[3] = { 0 };
 static bool g_sp_on = false;
-static uint8_t g_cd_bak[3] = { 0 };
-static bool g_cd_on = false;
+static uint8_t g_cd_ui_bak[3] = { 0 };
+static bool g_cd_ui_on = false;
+static uint8_t g_cd_uican_bak[3] = { 0 };
+static bool g_cd_uican_on = false;
+static uint8_t g_cd_actor_bak[3] = { 0 };
+static bool g_cd_actor_on = false;
 
 extern "C" void __cdecl behit_stub(void) { return; }
 
@@ -329,11 +357,21 @@ inline bool infinite_sp(ov::Data& d, bool on) {
 }
 
 inline bool no_skill_cd(ov::Data& d, bool on) {
-    return patch_ret_false(d.ua + RVA_IS_SKILL_IN_CD, g_cd_bak, g_cd_on, on);
+    bool ok = true;
+    if (!patch_ret_false(d.ua + RVA_UI_IS_SKILL_IN_CD, g_cd_ui_bak, g_cd_ui_on, on)) ok = false;
+    if (!patch_ret_true(d.ua + RVA_UI_CAN_USE_SKILL, g_cd_uican_bak, g_cd_uican_on, on)) ok = false;
+    if (!patch_ret_true(d.ua + RVA_AVATAR_CAN_USE_SKILL, g_cd_actor_bak, g_cd_actor_on, on)) ok = false;
+    if (!ok) {
+        if (g_cd_ui_on == on) patch_ret_false(d.ua + RVA_UI_IS_SKILL_IN_CD, g_cd_ui_bak, g_cd_ui_on, !on);
+        if (g_cd_uican_on == on) patch_ret_true(d.ua + RVA_UI_CAN_USE_SKILL, g_cd_uican_bak, g_cd_uican_on, !on);
+        if (g_cd_actor_on == on) patch_ret_true(d.ua + RVA_AVATAR_CAN_USE_SKILL, g_cd_actor_bak, g_cd_actor_on, !on);
+        return false;
+    }
+    return true;
 }
 
 inline bool sp_applied() { return g_sp_on; }
-inline bool cd_applied() { return g_cd_on; }
+inline bool cd_applied() { return g_cd_ui_on && g_cd_uican_on && g_cd_actor_on; }
 inline bool god_applied() { return g_behit_on; }
 
 inline int64_t kill_all(ov::Data& d, const State& s) {

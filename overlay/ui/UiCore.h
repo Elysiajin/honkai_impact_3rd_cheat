@@ -11,6 +11,9 @@ extern ImFont* ubu_2;
 extern ImFont* ubu_child;
 extern ImFont* ubu_preview;
 extern ImFont* cruin_0;
+extern ImFont* esp_s;
+extern ImFont* esp_m;
+extern ImFont* esp_l;
 
 namespace ui
 {
@@ -48,6 +51,8 @@ struct FontSet
 const FontSet& Fonts();
 
 bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap);
+
+ImFont* EspFont(float px);
 
 void  ApplyTheme();
 void  SetUiScale(float scale);

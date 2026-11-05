@@ -4,6 +4,7 @@
 #include <dxgi.h>
 
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -536,8 +537,9 @@ static void draw_esp(float dt) {
     const float esp_h  = cfg.esp_h;
     const uint64_t now = GetTickCount64();
 
-    ImFont* f = ui::Fonts().small ? ui::Fonts().small : ImGui::GetFont();
-    const float fsz = f ? f->FontSize : ImGui::GetFontSize();
+    ImFont* f = ui::EspFont(cfg.esp_font);
+    if (!f) f = ui::Fonts().small ? ui::Fonts().small : ImGui::GetFont();
+    const float fsz = f ? (cfg.esp_font > 1.0f ? cfg.esp_font : (f ? f->FontSize : 20.0f)) : 20.0f;
 
     const int li = find_local_avatar(s);
     const float* ref = (li >= 0) ? &s.avatars[(size_t)li].x : s.cam_pos;
@@ -561,9 +563,19 @@ static void draw_esp(float dt) {
 
         if (show_box) draw_box(dl, a, b, col);
         if (show_name) {
-            if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", e.name.c_str(), dist);
-            else           snprintf(line, sizeof line, "%s", e.name.c_str());
-            dl->AddText(f, fsz, ImVec2(a.x, a.y - fsz - 2.0f), col, line);
+            const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
+            if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", nm, dist);
+            else           snprintf(line, sizeof line, "%s", nm);
+            const ImVec2 ts = f->CalcTextSizeA(fsz, FLT_MAX, 0.0f, line, nullptr);
+            const float tx = (a.x + b.x) * 0.5f - ts.x * 0.5f;
+            const float ty = a.y - ts.y - cfg.esp_off;
+            // 先描边再填字，避免亮背景看不清
+            const ImU32 sh = IM_COL32(0, 0, 0, 200);
+            dl->AddText(f, fsz, ImVec2(tx - 1.0f, ty), sh, line);
+            dl->AddText(f, fsz, ImVec2(tx + 1.0f, ty), sh, line);
+            dl->AddText(f, fsz, ImVec2(tx, ty - 1.0f), sh, line);
+            dl->AddText(f, fsz, ImVec2(tx, ty + 1.0f), sh, line);
+            dl->AddText(f, fsz, ImVec2(tx, ty), col, line);
         }
         if (++drawn >= 400) break;
     }
@@ -587,7 +599,15 @@ static void draw_esp(float dt) {
             if (show_name) {
                 if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", e.name.c_str(), dist);
                 else           snprintf(line, sizeof line, "%s", e.name.c_str());
-                dl->AddText(f, fsz, ImVec2(a.x, a.y - fsz - 2.0f), col_team, line);
+                const ImVec2 ts = f->CalcTextSizeA(fsz, FLT_MAX, 0.0f, line, nullptr);
+                const float tx = (a.x + b.x) * 0.5f - ts.x * 0.5f;
+                const float ty = a.y - ts.y - cfg.esp_off;
+                const ImU32 sh = IM_COL32(0, 0, 0, 200);
+                dl->AddText(f, fsz, ImVec2(tx - 1.0f, ty), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx + 1.0f, ty), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx, ty - 1.0f), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx, ty + 1.0f), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx, ty), col_team, line);
             }
             if (++drawn >= 400) break;
         }
