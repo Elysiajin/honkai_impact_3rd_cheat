@@ -138,7 +138,6 @@ void AppFrame(float dt)
     case Page::Esp:    PageEsp();    break;
     case Page::Battle: PageBattle(); break;
     case Page::Ui:     PageUi();     break;
-    case Page::Logs:   PageLogs();   break;
     case Page::About:  PageAbout();  break;
     default: break;
     }

@@ -11,7 +11,6 @@ enum class Page
     Esp,
     Battle,
     Ui,
-    Logs,
     About,
     Count
 };
@@ -23,7 +22,6 @@ void PageHome();
 void PageEsp();
 void PageBattle();
 void PageUi();
-void PageLogs();
 void PageAbout();
 
 }

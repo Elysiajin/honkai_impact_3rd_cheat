@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 
 namespace ui
@@ -14,6 +15,8 @@ struct Settings
     bool  esp_dist  = true;
     bool  esp_box   = true;
     bool  god       = false;
+    bool  inf_sp    = false;
+    bool  no_cd     = false;
 
     float esp_h     = 1.7f;
     float max_dist  = 300.0f;
@@ -23,7 +26,8 @@ struct Settings
     bool  anim_on   = true;
     bool  show_grid = true;
     int   page      = 0;
-    bool  log_auto  = true;
+    bool  esp_smooth = true;
+    bool  esp_team  = true;
 };
 
 Settings& Cfg();
@@ -49,6 +53,8 @@ struct Status
     int      esp_drawn    = 0;
     int      kill_count   = 0;
     bool     god_applied  = false;
+    bool     inf_sp_applied = false;
+    bool     no_cd_applied  = false;
     uint64_t stamp        = 0;
 };
 
@@ -62,30 +68,17 @@ struct Requests
 
 Requests& Req();
 
-constexpr int kLogCap = 400;
-
-void        LogPush(const char* line);
-void        LogClear();
-int         LogCount();
-
-class LogScope
-{
-public:
-    LogScope();
-    ~LogScope();
-    int Count() const;
-    const char* At(int i) const;
-
-    LogScope(const LogScope&) = delete;
-    LogScope& operator=(const LogScope&) = delete;
-
-private:
-    std::unique_lock<std::mutex> lk_;
-    int count_ = 0;
-};
-
 void  Toast(const char* msg);
-void  Toastf(const char* fmt, ...);
+
+template <class... A>
+void Toastf(const char* fmt, A&&... a)
+{
+    char buf[192] = { 0 };
+    if (fmt) snprintf(buf, sizeof buf, fmt, a...);
+    buf[sizeof buf - 1] = 0;
+    Toast(buf);
+}
+
 void  ToastTick(float dt);
 int   ToastList(const char** out, float* alpha, int cap);
 

@@ -96,6 +96,9 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap)
     atlas->TexGlyphPadding = 1;
 
     g_fonts = FontSet();
+    // Context recreation frees the previous atlas and every font in it.
+    ico_0 = ico_1 = nullptr;
+    ubu_0 = ubu_1 = ubu_2 = ubu_child = ubu_preview = cruin_0 = nullptr;
 
     if (!FileExists(kFontFile))
     {
@@ -105,6 +108,7 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap)
         {
             g_fonts.body = g_fonts.small = g_fonts.tiny = atlas->Fonts[0];
             g_fonts.display = g_fonts.title = g_fonts.button = atlas->Fonts[0];
+            ubu_0 = ubu_1 = ubu_2 = ubu_child = ubu_preview = cruin_0 = atlas->Fonts[0];
         }
         return false;
     }
