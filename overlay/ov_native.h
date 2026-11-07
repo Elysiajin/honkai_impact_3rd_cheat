@@ -228,6 +228,9 @@ inline void refresh_ents(ov::Data& d, State& s) {
     const uint32_t gm = ovp::Rva(ovp::SymMonsterMgrGlobal);
     s.avatar_mgr = ga ? mgr_from(d, ga, d.find("AvatarManager")) : 0;
     s.monster_mgr = gm ? mgr_from(d, gm, d.find("MonsterManager")) : 0;
+    // 单例链拿不到实例（换版本 / 未进关卡时全局槽为空）时，退回按 klass 扫堆找实例。
+    if (!s.avatar_mgr) s.avatar_mgr = ovl::AvatarManager();
+    if (!s.monster_mgr) s.monster_mgr = ovl::MonsterManager();
 
     std::vector<uintptr_t> ps;
     if (s.avatar_mgr) {
@@ -255,7 +258,15 @@ inline void refresh_ents(ov::Data& d, State& s) {
     }
 
     s.ready = s.avatar_mgr || s.monster_mgr;
-    if (!s.ready) lstrcpyA(s.msg, "管理器链为空（还没进关卡？）");
+    if (!s.ready) {
+        // 区分「还没进关卡」和「版本变了解析不出来」，避免误导。
+        const int n_res = ovl::Stats().resolved;
+        if (n_res < 20)
+            wsprintfA(s.msg, "符号解析 %d/%d，可能已换版本（%s）",
+                      n_res, (int)ovp::SymCount, ovl::Stats().note);
+        else
+            lstrcpyA(s.msg, "管理器链为空（还没进关卡？）");
+    }
 }
 
 inline void refresh(ov::Data& d, State& s) {

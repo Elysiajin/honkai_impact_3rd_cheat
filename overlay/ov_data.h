@@ -1,6 +1,7 @@
 #pragma once
 #include "../sdk/bh3_sdk.h"
 #include "ov_profile.h"
+#include "ov_resolve_live.h"
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
@@ -162,14 +163,18 @@ inline bool Data::init() {
     if (!rt.attach()) { snprintf(last_error, sizeof last_error, "UserAssembly not loaded"); return false; }
     // 先校验 profile：版本不匹配时不读取任何游戏数据，避免用到过期偏移。
     if (!ovp::Init(rt.base())) { snprintf(last_error, sizeof last_error, "%s", ovp::Error()); return false; }
-    uintptr_t metadata = 0;
-    uint32_t version = 0;
-    if (!rd(rt.base() + bh3::RVA_METADATA_BODY, metadata) || !metadata ||
-        !rd(rt.base() + bh3::RVA_IL2CPP_VERSION, version) || version != 7) {
-        snprintf(last_error, sizeof last_error, "il2cpp not ready");
-        return false;
+    // 新构建上这些全局槽的 RVA 也会变；此时跳过该门禁，改由运行期按名解析兜底。
+    if (ovp::CurrentStatus() != ovp::Status::StaleBuild) {
+        uintptr_t metadata = 0;
+        uint32_t version = 0;
+        if (!rd(rt.base() + bh3::RVA_METADATA_BODY, metadata) || !metadata ||
+            !rd(rt.base() + bh3::RVA_IL2CPP_VERSION, version) || version != 7) {
+            snprintf(last_error, sizeof last_error, "il2cpp not ready");
+            return false;
+        }
     }
     ua = rt.base();
+    ovl::Start(ua);
     if (!build_index()) { snprintf(last_error, sizeof last_error, "waiting for live scene managers"); ua = 0; return false; }
     last_error[0] = 0;
     return true;
@@ -197,6 +202,14 @@ inline bool Data::build_index() {
         char name[192] = {};
         if (copy_name(mk, name, sizeof name) && std::strcmp(name, names[i]) == 0)
             clsmap.emplace(names[i], mk);
+    }
+    // 单例链失效时（游戏更新改了全局槽或链偏移），改用运行期按类名解析出的 klass。
+    if (clsmap.size() < 2) {
+        for (int i = 0; i < 2; ++i) {
+            if (clsmap.find(names[i]) != clsmap.end()) continue;
+            const uintptr_t k = ovr::FindKlass(names[i]);
+            if (k) clsmap.emplace(names[i], k);
+        }
     }
     count = (int)clsmap.size();
     return count == 2;

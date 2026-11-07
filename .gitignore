@@ -18,3 +18,7 @@ sdk.rar
 build.log
 overlay/build.log
 __pycache__/
+
+# 本地备份 / 测试产物
+*.bak
+sdk/*.exe

@@ -14,7 +14,7 @@
 namespace ovp
 {
 
-enum class Status : int { Uninit = 0, Ok, Partial, BadBuild };
+enum class Status : int { Uninit = 0, Ok, Partial, BadBuild, StaleBuild };
 
 inline uint8_t (&_ok())[SymCount]
 {
@@ -112,10 +112,13 @@ inline bool Init(uintptr_t ua)
     if (nt.FileHeader.TimeDateStamp != kBuildTimestamp ||
         nt.OptionalHeader.SizeOfImage != kBuildImageSize)
     {
+        // 版本变了：编译期 RVA 全部作废，但运行期「类名 + token」解析不依赖它们。
+        // 因此这里不拦死 init，改为把所有静态符号标记为无效，全部交给 fallback。
+        for (int i = 0; i < SymCount; ++i) _ok()[i] = 0;
         std::snprintf(_error(), sizeof _error(),
-                      "profile 与当前游戏版本不匹配，请重跑 sdk/gen_profile.py");
-        _status() = Status::BadBuild;
-        return false;
+                      "profile 与当前游戏版本不匹配（新构建），改用运行期按名解析");
+        _status() = Status::StaleBuild;
+        return true;
     }
 
     const uint32_t image_size = nt.OptionalHeader.SizeOfImage;
@@ -142,6 +145,30 @@ inline bool Init(uintptr_t ua)
 inline Status CurrentStatus() { return _status(); }
 inline const char* Error() { return _error(); }
 
+// 运行期按类名 + token 解析出来的表；校验失败的符号改用它，校验通过的仍走 kGenEntries。
+using FallbackFn = uint32_t (*)(int sym);
+
+inline FallbackFn& _fallback()
+{
+    static FallbackFn f = nullptr;
+    return f;
+}
+
+inline void SetFallback(FallbackFn f) { _fallback() = f; }
+
+inline uint32_t FallbackRva(Sym s)
+{
+    FallbackFn f = _fallback();
+    return f ? f((int)s) : 0;
+}
+
+inline int FallbackCount()
+{
+    int n = 0;
+    for (int i = 0; i < SymCount; ++i) if (!_ok()[i] && FallbackRva((Sym)i)) ++n;
+    return n;
+}
+
 inline int ValidCount()
 {
     int n = 0;
@@ -149,8 +176,15 @@ inline int ValidCount()
     return n;
 }
 
-// 只有通过校验的符号才返回非零地址。
+// 校验通过的符号用编译期表；校验失败时改用运行期按名字解析出的地址。
 inline uint32_t Rva(Sym s)
+{
+    if (s < 0 || s >= SymCount) return 0;
+    if (_ok()[s]) return kGenEntries[s].rva;
+    return FallbackRva(s);
+}
+
+inline uint32_t StaticRva(Sym s)
 {
     if (s < 0 || s >= SymCount) return 0;
     return _ok()[s] ? kGenEntries[s].rva : 0;
@@ -159,6 +193,14 @@ inline uint32_t Rva(Sym s)
 inline bool Valid(Sym s)
 {
     return Rva(s) != 0;
+}
+
+inline const char* Source(Sym s)
+{
+    if (s < 0 || s >= SymCount) return "-";
+    if (_ok()[s]) return "static";
+    if (FallbackRva(s)) return "resolved";
+    return "missing";
 }
 
 inline constexpr int UltraCount() { return kUltraCount; }
