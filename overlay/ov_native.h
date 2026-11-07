@@ -12,29 +12,8 @@
 
 namespace ovn {
 
-static const uint32_t RVA_GET_MAIN = 0x121E6560;
-static const uint32_t RVA_PIXEL_W = 0x121E5A80;
-static const uint32_t RVA_PIXEL_H = 0x121E5A90;
-static const uint32_t RVA_W2C = 0x121E5B90;
-static const uint32_t RVA_PROJ = 0x121E5C40;
-static const uint32_t RVA_DIE_NOW = 0x51E5960;
-static const uint32_t RVA_BEHIT = 0x4A73910;
-
-static const uint32_t RVA_IS_SP_ENOUGH = 0x8011F70;
-static const uint32_t RVA_GET_SKILL_CD = 0x8009530;
-static const uint32_t RVA_IS_SKILL_HAS_CD = 0x80152A0;
-static const uint32_t RVA_UI_IS_SKILL_IN_CD = 0x730B300;
-static const uint32_t RVA_UI_CAN_USE_SKILL = 0x730B200;
-static const uint32_t RVA_AVATAR_CAN_USE_SKILL = 0x4A6ADC0;
-
-static const uint32_t ULTRA_OVERRIDES[] = {
-    0x9BAE670, 0x9DD97D0, 0x863B560, 0x863BF90, 0x76C3560, 0x9BAF090,
-    0x505FF60, 0x58468F0, 0x81252E0, 0x6B86AF0, 0x863CA20, 0x80BE120,
-};
-static const int ULTRA_OVERRIDE_N = (int)(sizeof(ULTRA_OVERRIDES) / sizeof(ULTRA_OVERRIDES[0]));
-
-static const uint32_t G_AVATAR_MGR = 0x2641588;
-static const uint32_t G_MONSTER_MGR = 0x2642EA8;
+// 所有 RVA 都来自 bh3_profile.inc（sdk/gen_profile.py 生成），
+// 并已在 ovp::Init 中按 PE 指纹 + 函数前导字节校验；校验失败返回 0。
 
 struct Ent {
     uintptr_t p = 0;
@@ -183,17 +162,24 @@ inline void invalidate_camera(State& s, const char* reason) {
 inline bool cam_slow(ov::Data& d, State& s) {
     invalidate_camera(s, "等待当前场景相机");
     if (!d.ready_ok()) return false;
+    const uint32_t rv_main = ovp::Rva(ovp::SymCameraMain);
+    const uint32_t rv_w = ovp::Rva(ovp::SymCameraPixelW);
+    const uint32_t rv_h = ovp::Rva(ovp::SymCameraPixelH);
+    if (!rv_main || !rv_w || !rv_h) {
+        invalidate_camera(s, "profile 相机符号未通过校验");
+        return false;
+    }
     typedef void* (*GetMain)(void*);
     typedef int (*GetInt)(void*, void*);
     uintptr_t ua = d.ua;
-    void* cam = ((GetMain)(ua + RVA_GET_MAIN))(nullptr);
+    void* cam = ((GetMain)(ua + rv_main))(nullptr);
     uintptr_t native_camera = 0;
     if (!cam || !d.rd((uintptr_t)cam + 0x10, native_camera) || !native_camera) {
         invalidate_camera(s, "当前场景无有效相机");
         return false;
     }
-    int w = ((GetInt)(ua + RVA_PIXEL_W))(cam, nullptr);
-    int h = ((GetInt)(ua + RVA_PIXEL_H))(cam, nullptr);
+    int w = ((GetInt)(ua + rv_w))(cam, nullptr);
+    int h = ((GetInt)(ua + rv_h))(cam, nullptr);
     if (w <= 0 || h <= 0 || w > 16384 || h > 16384) {
         invalidate_camera(s, "像素尺寸无效");
         return false;
@@ -211,11 +197,17 @@ inline bool cam_fast(ov::Data& d, State& s) {
         invalidate_camera(s, "当前场景相机已释放");
         return false;
     }
+    const uint32_t rv_w2c = ovp::Rva(ovp::SymCameraW2c);
+    const uint32_t rv_proj = ovp::Rva(ovp::SymCameraProj);
+    if (!rv_w2c || !rv_proj) {
+        invalidate_camera(s, "profile 相机矩阵符号未通过校验");
+        return false;
+    }
     typedef void (*GetMat)(void*, void*, void*);
     uintptr_t ua = d.ua;
     float v[16] = { 0 }, p[16] = { 0 };
-    ((GetMat)(ua + RVA_W2C))((void*)s.camera, v, nullptr);
-    ((GetMat)(ua + RVA_PROJ))((void*)s.camera, p, nullptr);
+    ((GetMat)(ua + rv_w2c))((void*)s.camera, v, nullptr);
+    ((GetMat)(ua + rv_proj))((void*)s.camera, p, nullptr);
     for (int i = 0; i < 16; ++i) {
         if (!std::isfinite(v[i]) || !std::isfinite(p[i]) ||
             std::fabs(v[i]) > 1e7f || std::fabs(p[i]) > 1e7f) {
@@ -232,8 +224,10 @@ inline bool cam_fast(ov::Data& d, State& s) {
 }
 
 inline void refresh_ents(ov::Data& d, State& s) {
-    s.avatar_mgr = mgr_from(d, G_AVATAR_MGR, d.find("AvatarManager"));
-    s.monster_mgr = mgr_from(d, G_MONSTER_MGR, d.find("MonsterManager"));
+    const uint32_t ga = ovp::Rva(ovp::SymAvatarMgrGlobal);
+    const uint32_t gm = ovp::Rva(ovp::SymMonsterMgrGlobal);
+    s.avatar_mgr = ga ? mgr_from(d, ga, d.find("AvatarManager")) : 0;
+    s.monster_mgr = gm ? mgr_from(d, gm, d.find("MonsterManager")) : 0;
 
     std::vector<uintptr_t> ps;
     if (s.avatar_mgr) {
@@ -276,8 +270,8 @@ inline void refresh(ov::Data& d, State& s) {
 
 static uint8_t g_behit_backup[12] = { 0 };
 static bool g_behit_on = false;
-static uint8_t g_ultra_bak[ULTRA_OVERRIDE_N][3] = {};
-static bool g_ultra_on[ULTRA_OVERRIDE_N] = {};
+static uint8_t g_ultra_bak[ovp::kUltraCount][3] = {};
+static bool g_ultra_on[ovp::kUltraCount] = {};
 static uint8_t g_sp_bak[3] = { 0 };
 static bool g_sp_on = false;
 static uint8_t g_cd_ui_bak[3] = { 0 };
@@ -286,6 +280,13 @@ static uint8_t g_cd_uican_bak[3] = { 0 };
 static bool g_cd_uican_on = false;
 static uint8_t g_cd_actor_bak[3] = { 0 };
 static bool g_cd_actor_on = false;
+static uint8_t g_crit_main_bak[2] = { 0 };
+static bool g_crit_main_on = false;
+static uint8_t g_crit_phys_bak[2] = { 0 };
+static bool g_crit_phys_on = false;
+static uint8_t g_crit_elem_bak[2] = { 0 };
+static bool g_crit_elem_on = false;
+static bool g_atk_speed_on = false;
 
 extern "C" void __cdecl behit_stub(void) { return; }
 
@@ -324,7 +325,9 @@ inline bool patch_ret_false(uintptr_t at, uint8_t* bak, bool& flag, bool on) {
 }
 
 inline bool god_mode(ov::Data& d, bool on) {
-    uintptr_t t = d.ua + RVA_BEHIT;
+    const uint32_t rv = ovp::Rva(ovp::SymBeHit);
+    if (!rv) return false;
+    uintptr_t t = d.ua + rv;
     if (on == g_behit_on) return true;
     if (on) {
         uint8_t patch[12];
@@ -341,47 +344,135 @@ inline bool god_mode(ov::Data& d, bool on) {
 
 inline bool infinite_sp(ov::Data& d, bool on) {
     if (on == g_sp_on) return true;
+    const uint32_t rv_sp = ovp::Rva(ovp::SymIsSpEnough);
+    if (!rv_sp) return false;
     bool ok = true;
-    if (!patch_ret_true(d.ua + RVA_IS_SP_ENOUGH, g_sp_bak, g_sp_on, on)) ok = false;
-    for (int i = 0; i < ULTRA_OVERRIDE_N; ++i) {
-        if (!patch_ret_true(d.ua + ULTRA_OVERRIDES[i], g_ultra_bak[i], g_ultra_on[i], on)) ok = false;
+    if (!patch_ret_true(d.ua + rv_sp, g_sp_bak, g_sp_on, on)) ok = false;
+    for (int i = 0; i < ovp::kUltraCount; ++i) {
+        const uint32_t rv = ovp::UltraRva(i);
+        if (!rv) { ok = false; continue; }
+        if (!patch_ret_true(d.ua + rv, g_ultra_bak[i], g_ultra_on[i], on)) ok = false;
     }
     if (!ok) {
-        for (int i = 0; i < ULTRA_OVERRIDE_N; ++i) {
-            if (g_ultra_on[i] == on) patch_ret_true(d.ua + ULTRA_OVERRIDES[i], g_ultra_bak[i], g_ultra_on[i], !on);
+        for (int i = 0; i < ovp::kUltraCount; ++i) {
+            const uint32_t rv = ovp::UltraRva(i);
+            if (rv && g_ultra_on[i] == on) patch_ret_true(d.ua + rv, g_ultra_bak[i], g_ultra_on[i], !on);
         }
-        if (g_sp_on == on) patch_ret_true(d.ua + RVA_IS_SP_ENOUGH, g_sp_bak, g_sp_on, !on);
+        if (g_sp_on == on) patch_ret_true(d.ua + rv_sp, g_sp_bak, g_sp_on, !on);
         return false;
     }
     return true;
 }
 
 inline bool no_skill_cd(ov::Data& d, bool on) {
+    const uint32_t rv_ui = ovp::Rva(ovp::SymUiSkillInCd);
+    const uint32_t rv_can = ovp::Rva(ovp::SymUiCanUseSkill);
+    const uint32_t rv_actor = ovp::Rva(ovp::SymAvatarCanUseSkill);
+    if (!rv_ui || !rv_can || !rv_actor) return false;
     bool ok = true;
-    if (!patch_ret_false(d.ua + RVA_UI_IS_SKILL_IN_CD, g_cd_ui_bak, g_cd_ui_on, on)) ok = false;
-    if (!patch_ret_true(d.ua + RVA_UI_CAN_USE_SKILL, g_cd_uican_bak, g_cd_uican_on, on)) ok = false;
-    if (!patch_ret_true(d.ua + RVA_AVATAR_CAN_USE_SKILL, g_cd_actor_bak, g_cd_actor_on, on)) ok = false;
+    if (!patch_ret_false(d.ua + rv_ui, g_cd_ui_bak, g_cd_ui_on, on)) ok = false;
+    if (!patch_ret_true(d.ua + rv_can, g_cd_uican_bak, g_cd_uican_on, on)) ok = false;
+    if (!patch_ret_true(d.ua + rv_actor, g_cd_actor_bak, g_cd_actor_on, on)) ok = false;
     if (!ok) {
-        if (g_cd_ui_on == on) patch_ret_false(d.ua + RVA_UI_IS_SKILL_IN_CD, g_cd_ui_bak, g_cd_ui_on, !on);
-        if (g_cd_uican_on == on) patch_ret_true(d.ua + RVA_UI_CAN_USE_SKILL, g_cd_uican_bak, g_cd_uican_on, !on);
-        if (g_cd_actor_on == on) patch_ret_true(d.ua + RVA_AVATAR_CAN_USE_SKILL, g_cd_actor_bak, g_cd_actor_on, !on);
+        if (g_cd_ui_on == on) patch_ret_false(d.ua + rv_ui, g_cd_ui_bak, g_cd_ui_on, !on);
+        if (g_cd_uican_on == on) patch_ret_true(d.ua + rv_can, g_cd_uican_bak, g_cd_uican_on, !on);
+        if (g_cd_actor_on == on) patch_ret_true(d.ua + rv_actor, g_cd_actor_bak, g_cd_actor_on, !on);
         return false;
     }
     return true;
 }
 
+// 把暴击随机比较的 jbe 改成 NOP，条件分支永远落入暴击处理。
+inline bool patch_crit_jbe(uintptr_t at, uint8_t* bak, bool& flag, bool on) {
+    if (on == flag) return true;
+    if (on) {
+        uint8_t cur[2] = { 0 };
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(), (void*)at, cur, 2, &got) || got != 2)
+            return false;
+        if (cur[0] != 0x76) return false;  // 只接受 jbe rel8，构建不匹配时不动代码
+        const uint8_t nop[2] = { 0x90, 0x90 };
+        if (!write_code(at, nop, 2, bak)) return false;
+    } else {
+        if (!write_code(at, bak, 2, nullptr)) return false;
+    }
+    flag = on;
+    return true;
+}
+
+inline bool hundred_crit(ov::Data& d, bool on) {
+    const uint32_t rv_main = ovp::Rva(ovp::SymCritMain);
+    const uint32_t rv_phys = ovp::Rva(ovp::SymCritPhys);
+    const uint32_t rv_elem = ovp::Rva(ovp::SymCritElem);
+    if (!rv_main || !rv_phys || !rv_elem) return false;
+    bool ok = true;
+    if (!patch_crit_jbe(d.ua + rv_main, g_crit_main_bak, g_crit_main_on, on)) ok = false;
+    if (!patch_crit_jbe(d.ua + rv_phys, g_crit_phys_bak, g_crit_phys_on, on)) ok = false;
+    if (!patch_crit_jbe(d.ua + rv_elem, g_crit_elem_bak, g_crit_elem_on, on)) ok = false;
+    if (!ok) {
+        if (g_crit_main_on == on) patch_crit_jbe(d.ua + rv_main, g_crit_main_bak, g_crit_main_on, !on);
+        if (g_crit_phys_on == on) patch_crit_jbe(d.ua + rv_phys, g_crit_phys_bak, g_crit_phys_on, !on);
+        if (g_crit_elem_on == on) patch_crit_jbe(d.ua + rv_elem, g_crit_elem_bak, g_crit_elem_on, !on);
+        return false;
+    }
+    return true;
+}
+
+// 倍攻：按倍率覆盖角色 Animator 播放速度，关闭时恢复游戏原速。
+inline bool attack_speed(ov::Data& d, const State& s, bool on, float mult) {
+    if (!on) {
+        if (!g_atk_speed_on) return true;
+        const uint32_t rv = ovp::Rva(ovp::SymAnimSpeedCancel);
+        if (!rv) return false;
+        typedef void (*CancelFn)(void*);
+        for (const Ent& e : s.avatars) {
+            if (!e.p) continue;
+            uintptr_t k = 0;
+            if (!d.rd(e.p, k) || k != e.k) continue;
+            uintptr_t animator = 0;
+            if (!d.rd(e.p + 0x270, animator) || !animator) continue;
+            ((CancelFn)(d.ua + rv))((void*)e.p);
+        }
+        g_atk_speed_on = false;
+        return true;
+    }
+
+    const uint32_t rv = ovp::Rva(ovp::SymAnimSpeedApply);
+    if (!rv) return false;
+    if (mult < 1.0f) mult = 1.0f;
+    if (mult > 10.0f) mult = 10.0f;
+
+    typedef void (*ApplyFn)(void*, float);
+    int n = 0;
+    for (const Ent& e : s.avatars) {
+        if (!e.p) continue;
+        uintptr_t k = 0;
+        if (!d.rd(e.p, k) || k != e.k) continue;
+        uintptr_t animator = 0;
+        if (!d.rd(e.p + 0x270, animator) || !animator) continue;
+        ((ApplyFn)(d.ua + rv))((void*)e.p, mult);
+        ++n;
+    }
+    g_atk_speed_on = n > 0;
+    return n > 0;
+}
+
 inline bool sp_applied() { return g_sp_on; }
 inline bool cd_applied() { return g_cd_ui_on && g_cd_uican_on && g_cd_actor_on; }
+inline bool crit_applied() { return g_crit_main_on && g_crit_phys_on && g_crit_elem_on; }
+inline bool atk_speed_applied() { return g_atk_speed_on; }
 inline bool god_applied() { return g_behit_on; }
 
 inline int64_t kill_all(ov::Data& d, const State& s) {
+    const uint32_t rv = ovp::Rva(ovp::SymDieNow);
+    if (!rv) return 0;
     typedef void (*DieNow)(void*, bool, void*);
     int n = 0;
     for (const Ent& e : s.monsters) {
         if (!e.p) continue;
         uintptr_t klass = 0;
         if (!d.rd(e.p, klass) || klass != e.k) continue;
-        ((DieNow)(d.ua + RVA_DIE_NOW))((void*)e.p, true, nullptr);
+        ((DieNow)(d.ua + rv))((void*)e.p, true, nullptr);
         if (++n >= 64) break;
     }
     return n;

@@ -5175,7 +5175,7 @@ ImVec2 ImGui::GetItemRectSize()
 #include "saphire_colors.h"
 #include <map>
 extern ImFont* ubu_child;
-
+namespace ui { float S(); }
 bool ImGui::BeginChildEx(const char* name, ImGuiID id, const ImVec2& size_arg, bool border, ImGuiWindowFlags flags)
 {
     ImGuiContext& g = *GImGui;
@@ -5313,26 +5313,26 @@ bool ImGui::BeginChildPosEx(ImTextureID icon, const char* name, ImGuiID id, cons
         ImFormatStringToTempBuffer(&temp_window_name, NULL, "%s/%08X", parent_window->Name, id);
 
     if (!border) {
-
+        const float ks = ui::S();
         ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(0.0f, 0.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x + 0.2f, size_arg.y), GetColorU32(c::child_background), g.Style.ChildRounding + 2, ImGuiWindowFlags_None);
 
         ImGui::GetWindowDrawList()->AddRect(parent_window->DC.CursorPos + ImVec2(1, 1.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x - 1, size_arg.y - 1), GetColorU32(c::accent_color, 0.1f), g.Style.ChildRounding, ImGuiWindowFlags_None, 2);
 
-        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(0.0f, 7.0f), parent_window->DC.CursorPos + ImVec2(4, size_arg.y - 7), GetColorU32(c::border_child_default), 10, ImGuiWindowFlags_None);
-        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(size_arg.x - 4, 7.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x, size_arg.y - 7), GetColorU32(c::border_child_default), 10, ImGuiWindowFlags_None);
+        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(0.0f, 7.0f * ks), parent_window->DC.CursorPos + ImVec2(4 * ks, size_arg.y - 7.0f * ks), GetColorU32(c::border_child_default), 10 * ks, ImGuiWindowFlags_None);
+        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(size_arg.x - 4 * ks, 7.0f * ks), parent_window->DC.CursorPos + ImVec2(size_arg.x, size_arg.y - 7.0f * ks), GetColorU32(c::border_child_default), 10 * ks, ImGuiWindowFlags_None);
 
-        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(0.0f, 7.0f), parent_window->DC.CursorPos + ImVec2(4, size_arg.y - 7), GetColorU32(c::border_child_default), 10, ImGuiWindowFlags_None);
-        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(size_arg.x - 4, 7.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x, size_arg.y - 7), GetColorU32(c::border_child_default), 10, ImGuiWindowFlags_None);
+        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(0.0f, 7.0f * ks), parent_window->DC.CursorPos + ImVec2(4 * ks, size_arg.y - 7.0f * ks), GetColorU32(c::border_child_default), 10 * ks, ImGuiWindowFlags_None);
+        ImGui::GetWindowDrawList()->AddRectFilled(parent_window->DC.CursorPos + ImVec2(size_arg.x - 4 * ks, 7.0f * ks), parent_window->DC.CursorPos + ImVec2(size_arg.x, size_arg.y - 7.0f * ks), GetColorU32(c::border_child_default), 10 * ks, ImGuiWindowFlags_None);
 
-        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(8, 0.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, 3), GetColorU32(c::accent_color,0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color,0));
-        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(size_arg.x - 8, 0.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, 3), GetColorU32(c::accent_color, 0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color,0));
+        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(8 * ks, 0.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, 3 * ks), GetColorU32(c::accent_color,0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color,0));
+        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(size_arg.x - 8 * ks, 0.0f), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, 3 * ks), GetColorU32(c::accent_color, 0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color,0));
 
-        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(8, size_arg.y), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, size_arg.y - 3), GetColorU32(c::accent_color, 0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color, 0));
-        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(size_arg.x - 8, size_arg.y), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, size_arg.y - 3), GetColorU32(c::accent_color, 0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color, 0));
+        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(8 * ks, size_arg.y), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, size_arg.y - 3 * ks), GetColorU32(c::accent_color, 0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color, 0));
+        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(parent_window->DC.CursorPos + ImVec2(size_arg.x - 8 * ks, size_arg.y), parent_window->DC.CursorPos + ImVec2(size_arg.x / 2, size_arg.y - 3 * ks), GetColorU32(c::accent_color, 0), GetColorU32(c::accent_color), GetColorU32(c::accent_color), GetColorU32(c::accent_color, 0));
 
-        ImGui::GetWindowDrawList()->AddText(ubu_child, 15.f, parent_window->DC.CursorPos + ImVec2(20, 13), GetColorU32(c::child_name), name);
+        ImGui::GetWindowDrawList()->AddText(ubu_child, 15.f * ks, parent_window->DC.CursorPos + ImVec2(20 * ks, 13 * ks), GetColorU32(c::child_name), name);
 
-        ImGui::GetWindowDrawList()->AddImage(icon, parent_window->DC.CursorPos + ImVec2(240, 11), parent_window->DC.CursorPos + ImVec2(256, 27), ImVec2(0, 0), ImVec2(1, 1), GetColorU32(c::child_name));
+        ImGui::GetWindowDrawList()->AddImage(icon, parent_window->DC.CursorPos + ImVec2(240 * ks, 11 * ks), parent_window->DC.CursorPos + ImVec2(256 * ks, 27 * ks), ImVec2(0, 0), ImVec2(1, 1), GetColorU32(c::child_name));
 
     }
     bool ret = Begin(temp_window_name, NULL, flags);
@@ -5358,8 +5358,9 @@ bool ImGui::BeginChildPosEx(ImTextureID icon, const char* name, ImGuiID id, cons
 bool ImGui::BeginChildPos(ImTextureID icon, const char* str_id, const ImVec2& size_arg, bool border, ImGuiWindowFlags extra_flags)
 {
     ImGuiWindow* window = GetCurrentWindow();
-    PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 50));
-    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 28));
+    const float ks = ui::S();
+    PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * ks, 50 * ks));
+    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 28 * ks));
     return BeginChildPosEx(icon, str_id, window->GetID(str_id), size_arg, border, extra_flags | ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoScrollbar);
 }
 

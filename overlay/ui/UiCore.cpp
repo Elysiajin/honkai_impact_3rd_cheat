@@ -60,13 +60,42 @@ static FontSet g_fonts;
 static float   g_scale = 1.0f;
 static float   g_dt    = 1.0f / 60.0f;
 
+// 字体图集重建请求（图集只能在 ImGui::NewFrame() 之前修改）
+static bool    g_rebuild_pending = false;
+static float   g_rebuild_scale   = 1.0f;
+static float   g_rebuild_time    = -1000.0f;
+
 const FontSet& Fonts() { return g_fonts; }
 
 float UiScale() { return g_scale; }
 float S()       { return g_scale; }
 
 float Dt() { return g_dt; }
-void  SetDt(float dt) { g_dt = (dt > 0.0f && dt < 0.25f) ? dt : (1.0f / 60.0f); }
+void  SetDt(float dt)
+{
+    g_dt = (dt > 0.0f && dt < 0.25f) ? dt : (1.0f / 60.0f);
+    if (g_rebuild_pending) g_rebuild_time += g_dt;
+}
+
+void RequestFontRebuild(float scale)
+{
+    if (scale < 0.75f) scale = 0.75f;
+    if (scale > 1.60f) scale = 1.60f;
+    if (!g_rebuild_pending && scale == g_scale) return;   // 已在目标缩放上
+    g_rebuild_pending = true;
+    g_rebuild_scale   = scale;
+    g_rebuild_time    = 0.0f;                             // 拖动滑块期间持续清零 → 去抖
+}
+
+bool TakeFontRebuild(float* out_scale)
+{
+    if (!g_rebuild_pending) return false;
+    if (g_rebuild_time < 0.16f) return false;             // 等拖动停止
+    g_rebuild_pending = false;
+    g_rebuild_time    = 0.0f;
+    if (out_scale) *out_scale = g_rebuild_scale;
+    return true;
+}
 
 // 优先用项目自带字体，其余为运行环境兜底
 static const char* kFontCandidates[] = {
@@ -150,6 +179,9 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap)
     if (scale < 0.5f) scale = 0.5f;
     if (scale > 2.5f) scale = 2.5f;
 
+    // 缩放变更时需要重建整个图集：先清掉旧的字体数据与纹理数据。
+    // 该函数只允许在 ImGui::NewFrame() 之前调用（图集 Locked 断言）。
+    atlas->Clear();
     atlas->TexDesiredWidth = 4096;
     atlas->TexGlyphPadding = 1;
 
@@ -204,6 +236,14 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap)
         if (g_fonts.cjk) snprintf(err, (size_t)err_cap, "ok %s", g_cjk_path);
         else             snprintf(err, (size_t)err_cap, "load failed");
     }
+
+    // 图集被清空后 io.FontDefault 会指向已释放的字体，必须重新指向新图集里的字体，
+    // 否则 NewFrame() 里的 IM_ASSERT(g.Font->IsLoaded()) 会失败。
+    if (ImGui::GetCurrentContext())
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.FontDefault = g_fonts.body ? g_fonts.body : (atlas->Fonts.empty() ? nullptr : atlas->Fonts[0]);
+    }
     return g_fonts.cjk;
 }
 
@@ -214,32 +254,37 @@ void SetUiScale(float scale)
     g_scale = scale;
 }
 
-void ApplyTheme()
+void ApplyTheme(float scale)
 {
     ImGuiStyle& st = ImGui::GetStyle();
 
+    // 所有尺寸都按界面缩放放大，否则缩放只改了窗口大小、内边距与行距不变。
+    if (scale <= 0.0f) scale = g_scale;
+    if (scale < 0.5f) scale = 0.5f;
+    if (scale > 2.5f) scale = 2.5f;
+
     st.WindowPadding            = ImVec2(0, 0);
-    st.FramePadding             = ImVec2(6, 3);
-    st.ItemSpacing              = ImVec2(0, 10);
-    st.ItemInnerSpacing         = ImVec2(10, 0);
-    st.CellPadding              = ImVec2(6, 3);
-    st.IndentSpacing            = 20.0f;
-    st.ScrollbarSize            = 2.0f;
-    st.GrabMinSize              = 10.0f;
+    st.FramePadding             = ImVec2(6 * scale, 3 * scale);
+    st.ItemSpacing              = ImVec2(0, 10 * scale);
+    st.ItemInnerSpacing         = ImVec2(10 * scale, 0);
+    st.CellPadding              = ImVec2(6 * scale, 3 * scale);
+    st.IndentSpacing            = 20.0f * scale;
+    st.ScrollbarSize            = 2.0f * scale;
+    st.GrabMinSize              = 10.0f * scale;
 
     st.WindowBorderSize         = 0.0f;
-    st.ChildBorderSize          = 1.0f;
+    st.ChildBorderSize          = 1.0f * scale;
     st.PopupBorderSize          = 0.0f;
     st.FrameBorderSize          = 0.0f;
     st.TabBorderSize            = 0.0f;
 
-    st.WindowRounding           = 8.0f;
-    st.ChildRounding            = 7.0f;
-    st.FrameRounding            = 4.0f;
-    st.PopupRounding            = 5.0f;
-    st.ScrollbarRounding        = 2.0f;
-    st.GrabRounding             = 4.0f;
-    st.TabRounding              = 3.0f;
+    st.WindowRounding           = 8.0f * scale;
+    st.ChildRounding            = 7.0f * scale;
+    st.FrameRounding            = 4.0f * scale;
+    st.PopupRounding            = 5.0f * scale;
+    st.ScrollbarRounding        = 2.0f * scale;
+    st.GrabRounding             = 4.0f * scale;
+    st.TabRounding              = 3.0f * scale;
 
     st.WindowTitleAlign         = ImVec2(0.0f, 0.5f);
     st.WindowMenuButtonPosition = ImGuiDir_None;

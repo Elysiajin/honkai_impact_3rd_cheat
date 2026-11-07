@@ -1,5 +1,6 @@
 #pragma once
 #include "../sdk/bh3_sdk.h"
+#include "ov_profile.h"
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
@@ -159,6 +160,8 @@ private:
 inline bool Data::init() {
     if (ua) return true;
     if (!rt.attach()) { snprintf(last_error, sizeof last_error, "UserAssembly not loaded"); return false; }
+    // 先校验 profile：版本不匹配时不读取任何游戏数据，避免用到过期偏移。
+    if (!ovp::Init(rt.base())) { snprintf(last_error, sizeof last_error, "%s", ovp::Error()); return false; }
     uintptr_t metadata = 0;
     uint32_t version = 0;
     if (!rd(rt.base() + bh3::RVA_METADATA_BODY, metadata) || !metadata ||
@@ -179,7 +182,11 @@ inline bool Data::build_index() {
     clsmap.clear();
     name_cache.clear();
     str_klass = 0;
-    const uint32_t globals[] = { 0x2641588, 0x2642EA8 };
+    // Raw 只是编译期表里的值；生产路径上 Data::init 已先做过 profile 校验。
+    const uint32_t globals[] = {
+        ovp::Raw(ovp::SymAvatarMgrGlobal),
+        ovp::Raw(ovp::SymMonsterMgrGlobal),
+    };
     const char* names[] = { "AvatarManager", "MonsterManager" };
     for (int i = 0; i < 2; ++i) {
         uintptr_t mi = 0, klass = 0, c = 0, x = 0, e = 0, manager = 0, mk = 0;

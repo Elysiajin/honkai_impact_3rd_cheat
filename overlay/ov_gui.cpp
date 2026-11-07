@@ -22,6 +22,7 @@
 
 #include "ov_data.h"
 #include "ov_native.h"
+#include "ov_act.h"
 
 #include "ui/App.h"
 #include "ui/State.h"
@@ -92,12 +93,17 @@ static std::atomic<bool>        g_data_ready{ false };
 // Only the window thread touches g_data and g_game_nv. Present owns g_nv/UI.
 static ovn::State               g_nv;
 static ovn::State               g_game_nv;
+static ova::ActState            g_game_act;
+static ova::ActState            g_act;
+static ova::ActCtx              g_act_ctx;
+static int                      g_act_kill_marks = 0;
 static std::atomic<bool>        g_god_state{ false };
 struct GameExchange {
     ui::Settings cfg;
     ui::Requests req;
     ui::Status status;
     ovn::State snapshot;
+    ova::ActState act;
     bool snapshot_ready = false;
 };
 static GameExchange             g_game_exchange;
@@ -235,11 +241,35 @@ static void tick_game_thread() {
         }
         if (cfg.inf_sp != ovn::sp_applied()) ovn::infinite_sp(g_data, cfg.inf_sp);
         if (cfg.no_cd != ovn::cd_applied()) ovn::no_skill_cd(g_data, cfg.no_cd);
+        if (cfg.crit != ovn::crit_applied()) ovn::hundred_crit(g_data, cfg.crit);
+        if (cfg.atk_on) ovn::attack_speed(g_data, g_game_nv, true, cfg.atk_mult);
+        else if (ovn::atk_speed_applied()) ovn::attack_speed(g_data, g_game_nv, false, 1.0f);
         if (rq.kill_all && g_game_nv.cam_ok && !g_game_nv.avatars.empty())
             st.kill_count += (int)ovn::kill_all(g_data, g_game_nv);
     } else {
         g_game_nv = ovn::State();
         lstrcpynA(g_game_nv.msg, g_data.last_error, (int)sizeof g_game_nv.msg);
+    }
+
+    // 活动模块独立驱动：活动场景没有主战场 manager，不能挂在 g_data_ready 上
+    if (g_data.rt.ready()) {
+        if (rq.act_scan_again) {
+            g_game_act = ova::ActState();
+            g_act_ctx.reset_scan();
+        } else if (rq.act_refresh && g_game_act.ready) {
+            g_game_act.t = 0;  // 强制下一次 refresh 立即重读实体
+        }
+        if (cfg.act_on || cfg.act_god || cfg.act_kill || g_game_act.ready) {
+            ova::refresh(g_data, g_game_act, g_act_ctx, 2);
+            if (g_game_act.ready) {
+                if (cfg.act_kill || rq.act_kill_all)
+                    g_act_kill_marks += ova::kill_all(g_data, g_game_act);
+                if (cfg.act_god) ova::god_ally(g_data, g_game_act);
+                ova::enforce_kills(g_data, g_game_act);
+            }
+        }
+    } else {
+        g_game_act = ova::ActState();
     }
     st.avatar_mgr = g_game_nv.avatar_mgr;
     st.monster_mgr = g_game_nv.monster_mgr;
@@ -257,9 +287,33 @@ static void tick_game_thread() {
     st.god_applied = g_god_state.load();
     st.inf_sp_applied = ovn::sp_applied();
     st.no_cd_applied = ovn::cd_applied();
+    st.crit_applied = ovn::crit_applied();
+    st.atk_speed_applied = ovn::atk_speed_applied();
+
+    st.act_ready = g_game_act.ready;
+    st.act_in = g_game_act.in_act;
+    st.act_n = g_game_act.n;
+    st.act_ally = g_game_act.ally_n;
+    st.act_enemy = g_game_act.enemy_n;
+    st.act_scan_ms = g_game_act.scan_ms;
+    st.act_killed = g_act_kill_marks;
+    snprintf(st.act_msg, sizeof st.act_msg, "%s", g_game_act.msg);
+    for (int i = 0; i < 32; ++i) {
+        ui::Status::ActUnit& u = st.act_u[i];
+        u = ui::Status::ActUnit();
+        if (i >= g_game_act.n) continue;
+        const ova::Actor& a = g_game_act.list[i];
+        u.camp = a.camp;
+        u.raw_camp = a.raw_camp;
+        u.hp = a.hp;
+        u.max_hp = a.max_hp > 0 ? a.max_hp : a.raw_max;
+        u.tag = a.camp == 2 ? a.monster_id : a.avatar_id;
+        u.slot = i;
+    }
     {
         std::lock_guard<std::mutex> lock(g_game_mutex);
         g_game_exchange.snapshot = g_game_nv;
+        g_game_exchange.act = g_game_act;
         g_game_exchange.status = st;
         g_game_exchange.snapshot_ready = true;
     }
@@ -289,9 +343,13 @@ static void tick_render_thread() {
         g_game_exchange.cfg = ui::Cfg();
         g_game_exchange.req.kill_all |= ui::Req().kill_all;
         g_game_exchange.req.rescan |= ui::Req().rescan;
+        g_game_exchange.req.act_kill_all |= ui::Req().act_kill_all;
+        g_game_exchange.req.act_scan_again |= ui::Req().act_scan_again;
+        g_game_exchange.req.act_refresh |= ui::Req().act_refresh;
         ui::Req() = ui::Requests();
         if (g_game_exchange.snapshot_ready) {
             std::swap(g_nv, g_game_exchange.snapshot);
+            std::swap(g_act, g_game_exchange.act);
             ui::Status& st = ui::St();
             const float fps = st.fps;
             const double frame_ms = st.frame_ms;
@@ -308,6 +366,9 @@ static void tick_render_thread() {
         ovn::invalidate_camera(g_nv, "等待游戏线程采样");
         g_nv.avatars.clear();
         g_nv.monsters.clear();
+    }
+    if (g_act.t && GetTickCount64() - g_act.t > 800) {
+        g_act = ova::ActState();
     }
 }
 
@@ -395,10 +456,11 @@ static bool init_gui(IDXGISwapChain* sc) {
 
     {
         char err[256] = { 0 };
-        ui::BuildFonts(io.Fonts, 1.0f, err, (int)sizeof err);
+        ui::SetUiScale(ui::Cfg().ui_scale);
+        ui::BuildFonts(io.Fonts, ui::UiScale(), err, (int)sizeof err);
     }
 
-    ui::ApplyTheme();
+    ui::ApplyTheme(ui::UiScale());
 
     g_win32_ready = ImGui_ImplWin32_Init(g_hwnd);
     if (!g_win32_ready) { reset_gui(); return false; }
@@ -646,9 +708,9 @@ static void render_overlay(IDXGISwapChain* sc) {
     }
     if (!g_gui_ready) init_gui(sc);
     if (g_gui_ready) {
-        static bool pk[6] = { false };
-        const int keys[6] = { VK_INSERT, VK_F3, VK_F5, VK_F6, VK_F7, VK_F8 };
-        for (int i = 0; i < 6; ++i) {
+        static bool pk[8] = { false };
+        const int keys[8] = { VK_INSERT, VK_F3, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10 };
+        for (int i = 0; i < 8; ++i) {
             bool down = (GetAsyncKeyState(keys[i]) & 0x8000) != 0;
             bool pressed = down && !pk[i];
             pk[i] = down;
@@ -666,6 +728,10 @@ static void render_overlay(IDXGISwapChain* sc) {
                 cfg.inf_sp = !cfg.inf_sp;
             } else if (keys[i] == VK_F8) {
                 cfg.no_cd = !cfg.no_cd;
+            } else if (keys[i] == VK_F9) {
+                cfg.crit = !cfg.crit;
+            } else if (keys[i] == VK_F10) {
+                cfg.atk_on = !cfg.atk_on;
             }
         }
 
@@ -693,6 +759,17 @@ static void render_overlay(IDXGISwapChain* sc) {
             float dt = last_tick ? (float)(now - last_tick) / 1000.0f : (1.0f / 60.0f);
             last_tick = now;
             if (dt <= 0.0f) dt = 1.0f / 60.0f;
+
+            // 界面缩放变更：字体图集只能在 NewFrame() 之前重建，这里取走
+            // AppFrame() 登记的请求（带 0.16s 去抖，滑块拖动中不会反复重建）。
+            float rebuild_scale = 1.0f;
+            if (ui::TakeFontRebuild(&rebuild_scale)) {
+                char err[256] = { 0 };
+                ui::SetUiScale(rebuild_scale);
+                ui::BuildFonts(io.Fonts, rebuild_scale, err, (int)sizeof err);
+                ui::ApplyTheme(rebuild_scale);
+                ImGui_ImplDX11_InvalidateDeviceObjects();
+            }
 
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();

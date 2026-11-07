@@ -2,6 +2,10 @@
 sdk/bh3_dump.cs
 sdk/bh3_fields.tsv
 sdk/bh3_methods_named.tsv
+sdk/bh3_methods_scan.tsv
+sdk/pool_methodinfo_scan.tsv
+sdk/method_pointers_map.tsv
+sdk/class_rid_base.tsv
 
 # 运行时日志 / 临时文件
 *.log

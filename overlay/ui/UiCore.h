@@ -54,10 +54,16 @@ bool BuildFonts(ImFontAtlas* atlas, float scale, char* err, int err_cap);
 
 ImFont* EspFont(float px);
 
-void  ApplyTheme();
+void  ApplyTheme(float scale = -1.0f);
 void  SetUiScale(float scale);
 float UiScale();
 float S();
+
+// 界面缩放变更后重建字体图集：图集只能在 ImGui::NewFrame() 之前修改，
+// 而 AppFrame() 运行在 NewFrame()..Render() 之间，所以这里只登记请求，
+// 由 ov_gui.cpp 在帧首调用 TakeFontRebuild() 取走并真正重建。
+void  RequestFontRebuild(float scale);
+bool  TakeFontRebuild(float* out_scale);
 
 float Dt();
 void  SetDt(float dt);

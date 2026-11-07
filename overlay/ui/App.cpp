@@ -39,10 +39,11 @@ void AppFrame(float dt)
 
     Settings& cfg = Cfg();
 
+    // 缩放变更：只登记重建请求（图集重建必须在 NewFrame() 之前，见 ov_gui.cpp）。
+    // 样式与字体在重建时一起更新，这里不直接改 g_scale，避免字体与布局不同步。
     if (cfg.ui_scale != g_ui_applied)
     {
-        SetUiScale(cfg.ui_scale);
-        ApplyTheme();
+        RequestFontRebuild(cfg.ui_scale);
         g_ui_applied = cfg.ui_scale;
     }
 
@@ -81,7 +82,7 @@ void AppFrame(float dt)
     dl->AddLine(ImVec2(p.x + L, p.y + 45.0f * s), ImVec2(p.x + W, p.y + 45.0f * s), ImGui::GetColorU32(ImVec4(38.0f / 255.0f, 37.0f / 255.0f, 43.0f / 255.0f, 1.0f)), 0.5f);
 
     if (cruin_0)
-        dl->AddText(cruin_0, 25.0f * s, ImVec2(p.x + 45.0f * s, p.y + 11.0f * s), ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f)), "\xe5\xb4\xa9\xe5\x9d\x8f 3");
+        dl->AddText(cruin_0, 25.0f * s, ImVec2(p.x + 45.0f * s, p.y + 11.0f * s), ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f)), "崩坏 3");
 
     dl->AddRectFilledMultiColor(ImVec2(p.x + 47.0f * s, p.y + 64.0f * s), ImVec2(p.x + 91.0f * s, p.y + 65.0f * s),
                                 ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.0f)), ImGui::GetColorU32(c::accent_color),
@@ -137,6 +138,7 @@ void AppFrame(float dt)
     case Page::Home:   PageHome();   break;
     case Page::Esp:    PageEsp();    break;
     case Page::Battle: PageBattle(); break;
+    case Page::Activity: PageActivity(); break;
     case Page::Ui:     PageUi();     break;
     case Page::About:  PageAbout();  break;
     default: break;

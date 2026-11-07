@@ -9,7 +9,7 @@ OUT = os.path.join(ROOT, "overlay", "ui", "_ranges.inc")
 
 def decode(path):
     raw = open(path, "rb").read()
-    # C++ 源码既有 \xNN 转义也有直接写入的 UTF-8，统一还原成字节再解码
+    # 源码统一为 UTF-8；旧文件里若残留 \xNN 转义也能一并还原
     data = re.sub(rb"\\x([0-9a-fA-F]{2})", lambda m: bytes([int(m.group(1), 16)]), raw)
     return data.decode("utf-8", errors="ignore")
 
@@ -20,16 +20,18 @@ for f in glob.glob(os.path.join(ROOT, "overlay", "**", "*.cpp"), recursive=True)
     chars.update(ord(c) for c in decode(f) if ord(c) >= 0x80)
 
 lines = []
-line = "   "
+line = ""
 for cp in sorted(chars):
-    esc = "".join("\\x%02X" % b for b in chr(cp).encode("utf-8"))
-    if len(line) + len(esc) > 100:
+    ch = chr(cp)
+    if ch in '"\\':
+        ch = "\\" + ch
+    if len(line) + len(ch) > 96:
         lines.append(line)
-        line = "   "
-    line += esc
+        line = ""
+    line += ch
 
 lines.append(line)
-body = "\n".join('    "%s"' % l.strip() for l in lines if l.strip())
+body = "\n".join('    "%s"' % l for l in lines if l)
 
 with open(OUT, "w", encoding="utf-8", newline="\n") as fp:
     fp.write("// 由根目录 gen_ranges.py 生成：overlay 源码用到的非 ASCII 字符\n")

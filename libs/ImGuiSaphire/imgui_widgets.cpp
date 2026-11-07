@@ -1150,6 +1150,7 @@ bool ImGui::Button(const char* label, const ImVec2& size_arg)
 }
 
 extern ImFont* ubu_child;
+namespace ui { float S(); }
 
 struct tab_state {
 
@@ -1195,18 +1196,19 @@ bool ImGui::Tab(const char* ico, const char* label, bool selected, const ImVec2&
     it_anim->second.glow_color = ImLerp(it_anim->second.glow_color, selected ? c::accent_color : ImVec4(0, 0, 0, 0), g.IO.DeltaTime * 6.f);
 
     if (tabs) {
+        const float ks = ui::S();
 
-        ImGui::GetWindowDrawList()->AddRectFilled(bb.Min + ImVec2(10,4), bb.Max - ImVec2(17, -4), GetColorU32(it_anim->second.background_color), 3);
-        ImGui::GetWindowDrawList()->AddRectFilled(bb.Max - ImVec2(20, 22), bb.Max + ImVec2(-18, -6), GetColorU32(it_anim->second.background_fill), 10, ImDrawCornerFlags_Left);
+        ImGui::GetWindowDrawList()->AddRectFilled(bb.Min + ImVec2(10 * ks, 4 * ks), bb.Max - ImVec2(17 * ks, -4 * ks), GetColorU32(it_anim->second.background_color), 3 * ks);
+        ImGui::GetWindowDrawList()->AddRectFilled(bb.Max - ImVec2(20 * ks, 22 * ks), bb.Max + ImVec2(-18 * ks, -6 * ks), GetColorU32(it_anim->second.background_fill), 10 * ks, ImDrawCornerFlags_Left);
 
-        ImGui::GetWindowDrawList()->AddText(ico_0, 23, ImVec2(bb.Min.x + 20, bb.Max.y + style.FramePadding.y - 28), GetColorU32(it_anim->second.text_color), ico);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(bb.Min.x + 51, bb.Max.y + style.FramePadding.y - 26), GetColorU32(it_anim->second.text_color), label);
+        ImGui::GetWindowDrawList()->AddText(ico_0, 23 * ks, ImVec2(bb.Min.x + 20 * ks, bb.Max.y + style.FramePadding.y - 28 * ks), GetColorU32(it_anim->second.text_color), ico);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(bb.Min.x + 51 * ks, bb.Max.y + style.FramePadding.y - 26 * ks), GetColorU32(it_anim->second.text_color), label);
     }
     else {
 
-        ImGui::GetWindowDrawList()->AddRectFilled(bb.Min + ImVec2(size_arg.x / 3, 38), bb.Max - ImVec2(size_arg.x / 3, -15), GetColorU32(it_anim->second.background_color), 0);
-        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(bb.Min + ImVec2(size_arg.x / 3, 28), bb.Max - ImVec2(size_arg.x / 3, -15), ImColor(32, 31, 37, 0), ImColor(32, 31, 37, 0), GetColorU32(it_anim->second.glow_color), GetColorU32(it_anim->second.glow_color));
-
+        const float ks = ui::S();
+        ImGui::GetWindowDrawList()->AddRectFilled(bb.Min + ImVec2(size_arg.x / 3, 38 * ks), bb.Max - ImVec2(size_arg.x / 3, -15 * ks), GetColorU32(it_anim->second.background_color), 0);
+        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(bb.Min + ImVec2(size_arg.x / 3, 28 * ks), bb.Max - ImVec2(size_arg.x / 3, -15 * ks), ImColor(32, 31, 37, 0), ImColor(32, 31, 37, 0), GetColorU32(it_anim->second.glow_color), GetColorU32(it_anim->second.glow_color));
         PushStyleColor(ImGuiCol_Text, GetColorU32(it_anim->second.text_color));
         PushFont(ubu_child);
         RenderTextClipped(bb.Min + style.FramePadding + ImVec2(3, 1), bb.Max - style.FramePadding, label, NULL, &label_size, style.ButtonTextAlign, &bb);

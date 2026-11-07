@@ -9,6 +9,7 @@ set SRC=ov_gui.cpp ^
  ui\Widgets.cpp ^
  ui\State.cpp ^
  ui\Pages.cpp ^
+ ui\PageActivity.cpp ^
  ui\App.cpp
 
 set IMGUI_SRC="%IMGUI%\imgui.cpp" "%IMGUI%\imgui_draw.cpp" "%IMGUI%\imgui_tables.cpp" "%IMGUI%\imgui_widgets.cpp" "%IMGUI%\backends\imgui_impl_dx11.cpp" "%IMGUI%\backends\imgui_impl_win32.cpp"
