@@ -42,6 +42,7 @@ build_overlay.bat
 ```
 
 产物 `overlay/bh3_overlay.dll`（已入库，可直接注入）。
+MCP 与反汇编依赖已预编译在 `..\..\cxxmcp-build-mingw`、`..\..\zydis-build-mingw`。
 
 ## 使用
 
@@ -50,6 +51,18 @@ build_overlay.bat
 3. 「ESP 绘制」默认开启，画怪物框 / 名字 / 距离；
 4. `F5` 秒杀全部怪物；
 5. `F6` 无敌（hook `BaseMonoAvatar.BeHit`）。
+
+## MCP 服务
+
+渲染 hook 成功后自动在 `127.0.0.1:18517` 启动 Streamable HTTP MCP（「UI界面」页可开关、改端口）：
+
+- 地址：`http://127.0.0.1:18517/mcp`
+- 工具：`get_status`、`list_symbols`、`read_memory`、`write_memory`、`disassemble`、`call_function`、`call_method`
+- 内存一律通过 `ReadProcessMemory` / `WriteProcessMemory`，写入自动改页保护并回读校验
+- 反汇编使用 Zydis，输出指令文本、原始字节和跳转 / RIP 相对目标
+- `call_*` 由游戏主线程执行；`call_method` 按 IL2CPP 约定自动拼 `this` 和 `MethodInfo`
+- 调用签名或 `MethodInfo` 错误可能导致游戏崩溃，调用前先用 `disassemble` / `read_memory` 核对
+- 大块数据落盘到 `mcp_file/`：`read_memory` 返回 `.bin`/`.txt`，`write_memory` 可用 `data_file`
 
 ## 已验证的运行时链路
 

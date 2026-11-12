@@ -10,6 +10,8 @@ enum class Page
     Esp,
     Battle,
     Activity,
+    Lua,
+    Mcp,
     Ui,
     About,
     Count
@@ -30,6 +32,8 @@ void PageHome();
 void PageEsp();
 void PageBattle();
 void PageActivity();
+void PageLua();
+void PageMcp();
 void PageUi();
 void PageAbout();
 

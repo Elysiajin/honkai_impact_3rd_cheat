@@ -7,6 +7,8 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 
+#include "../ov_mcp.h"
+
 #include <cstdio>
 #include <cmath>
 
@@ -35,9 +37,10 @@ void AppFrame(float dt)
 {
     SetDt(dt);
 
-    if (!g_visible) return;
-
     Settings& cfg = Cfg();
+    ovmcp::Sync(cfg.mcp_on, (unsigned short)cfg.mcp_port);
+
+    if (!g_visible) return;
 
     // 缩放变更：只登记重建请求（图集重建必须在 NewFrame() 之前，见 ov_gui.cpp）。
     // 样式与字体在重建时一起更新，这里不直接改 g_scale，避免字体与布局不同步。
@@ -139,6 +142,7 @@ void AppFrame(float dt)
     case Page::Esp:    PageEsp();    break;
     case Page::Battle: PageBattle(); break;
     case Page::Activity: PageActivity(); break;
+    case Page::Lua:    PageLua();    break;
     case Page::Ui:     PageUi();     break;
     case Page::About:  PageAbout();  break;
     default: break;

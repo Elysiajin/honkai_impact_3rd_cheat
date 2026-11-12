@@ -245,6 +245,16 @@ inline bool Build()
     }
     uniq[n_uniq++] = "AvatarManager";
     uniq[n_uniq++] = "MonsterManager";
+    uniq[n_uniq++] = "LuaState";
+    uniq[n_uniq++] = "String";
+    uniq[n_uniq++] = "LuaManager";
+    uniq[n_uniq++] = "UILuaManager";
+    uniq[n_uniq++] = "RPSLuaManager";
+    uniq[n_uniq++] = "LevelDesignManager";
+    uniq[n_uniq++] = "HonKaiTCGLuaManager";
+    uniq[n_uniq++] = "TiledGameScriptor";
+    uniq[n_uniq++] = "VisualNovelScriptor";
+    uniq[n_uniq++] = "LuaScriptMgr";
 
     const int nfound = ovr::BuildIndexFor(uniq, n_uniq);
     int resolved = 0, mismatch = 0, by_sig = 0;

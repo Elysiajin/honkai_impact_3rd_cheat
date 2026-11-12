@@ -23,6 +23,8 @@
 #include "ov_data.h"
 #include "ov_native.h"
 #include "ov_act.h"
+#include "ov_lua.h"
+#include "ov_mcp.h"
 
 #include "ui/App.h"
 #include "ui/State.h"
@@ -97,6 +99,7 @@ static ova::ActState            g_game_act;
 static ova::ActState            g_act;
 static ova::ActCtx              g_act_ctx;
 static int                      g_act_kill_marks = 0;
+static ovlua::Session           g_lua;
 static std::atomic<bool>        g_god_state{ false };
 struct GameExchange {
     ui::Settings cfg;
@@ -211,6 +214,8 @@ static void tick_game_thread() {
     if (GetCurrentThreadId() != g_game_thread_id || g_unhook) return;
     std::unique_lock<std::mutex> sampling_lock(g_sampling_mutex, std::try_to_lock);
     if (!sampling_lock.owns_lock()) return;
+    // MCP 的函数调用只在游戏主线程执行，避免跨线程调 IL2CPP。
+    ovmcp::OnGameThreadTick();
     static uint64_t last_init = 0;
     ui::Settings cfg;
     ui::Requests rq;
@@ -271,6 +276,30 @@ static void tick_game_thread() {
     } else {
         g_game_act = ova::ActState();
     }
+
+    // Lua 控制台：扫描分帧进行，执行只在游戏主线程
+    if (g_data.ready_ok())
+    {
+        if (rq.lua_scan) ovlua::start_scan(g_data, g_lua);
+        ovlua::step_scan(g_data, g_lua);
+        if (rq.lua_trust && cfg.lua_sel >= 0 && cfg.lua_sel < g_lua.n)
+            g_lua.trusted[cfg.lua_sel] = true;
+        if (rq.lua_exec)
+        {
+            std::string lua_out;
+            const bool lua_ok = ovlua::exec(g_data, g_lua, cfg.lua_sel, rq.lua_code.c_str(), lua_out);
+            st.lua_ok = lua_ok;
+            snprintf(st.lua_out, sizeof st.lua_out, "%s", lua_out.c_str());
+        }
+    }
+    st.lua_ready = g_lua.lua_klass && g_lua.mi && g_lua.n > 0;
+    st.lua_scanning = g_lua.scanning;
+    st.lua_state_n = g_lua.n;
+    st.lua_trusted_n = 0;
+    for (int i = 0; i < g_lua.n; ++i) if (g_lua.trusted[i]) ++st.lua_trusted_n;
+    st.lua_state = (cfg.lua_sel >= 0 && cfg.lua_sel < g_lua.n) ? g_lua.states[cfg.lua_sel] : 0;
+    snprintf(st.lua_msg, sizeof st.lua_msg, "%s", g_lua.msg);
+
     st.avatar_mgr = g_game_nv.avatar_mgr;
     st.monster_mgr = g_game_nv.monster_mgr;
     st.avatar_n = (int)g_game_nv.avatars.size();
@@ -289,6 +318,11 @@ static void tick_game_thread() {
     st.no_cd_applied = ovn::cd_applied();
     st.crit_applied = ovn::crit_applied();
     st.atk_speed_applied = ovn::atk_speed_applied();
+
+    ovmcp::UpdateGameStatus(g_data.ua, g_data_ready,
+                            (int)g_game_nv.avatars.size(),
+                            (int)g_game_nv.monsters.size(),
+                            g_game_nv.cam_ok, g_game_nv.msg);
 
     st.act_ready = g_game_act.ready;
     st.act_in = g_game_act.in_act;
@@ -346,6 +380,13 @@ static void tick_render_thread() {
         g_game_exchange.req.act_kill_all |= ui::Req().act_kill_all;
         g_game_exchange.req.act_scan_again |= ui::Req().act_scan_again;
         g_game_exchange.req.act_refresh |= ui::Req().act_refresh;
+        g_game_exchange.req.lua_scan |= ui::Req().lua_scan;
+        g_game_exchange.req.lua_trust |= ui::Req().lua_trust;
+        if (ui::Req().lua_exec)
+        {
+            g_game_exchange.req.lua_exec = true;
+            g_game_exchange.req.lua_code = ui::Req().lua_code;
+        }
         ui::Req() = ui::Requests();
         if (g_game_exchange.snapshot_ready) {
             std::swap(g_nv, g_game_exchange.snapshot);
@@ -881,10 +922,14 @@ static void boot() {
                             (LPCWSTR)&boot, &pinned)) return;
     g_sample_msg = RegisterWindowMessageW(L"bh3-overlay-game-sample-v1");
     if (!g_sample_msg) return;
+    bool hooked = false;
     for (int i = 0; i < 1200 && !g_unhook; ++i) {
-        if (hook_present()) break;
+        if (hook_present()) { hooked = true; break; }
         Sleep(500);
     }
+    // 渲染 hook 就绪后再起 MCP，避免在加载器锁或初始化阶段开线程。
+    if (hooked)
+        ovmcp::Sync(ui::Cfg().mcp_on, (unsigned short)ui::Cfg().mcp_port);
 }
 
 static DWORD WINAPI boot_thread(LPVOID) { boot(); return 0; }

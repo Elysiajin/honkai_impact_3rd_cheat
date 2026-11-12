@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <string>
 
 namespace ui
 {
@@ -41,6 +42,13 @@ struct Settings
     bool  act_on     = false;  // 活动模块开关
     bool  act_god    = false;  // 我方无敌
     bool  act_kill   = false;  // 持续秒杀（跨波次）
+
+    // Lua 控制台
+    int   lua_sel    = 0;      // 当前选中的 LuaState 下标
+
+    // MCP 服务
+    bool  mcp_on     = true;   // 注入后自动监听
+    int   mcp_port   = 18517;
 };
 
 Settings& Cfg();
@@ -71,6 +79,16 @@ struct Status
     bool     crit_applied   = false;
     bool     atk_speed_applied = false;
     uint64_t stamp        = 0;
+
+    // Lua 控制台
+    bool     lua_ready      = false;
+    bool     lua_scanning   = false;
+    int      lua_state_n    = 0;
+    int      lua_trusted_n  = 0;
+    uintptr_t lua_state     = 0;
+    bool     lua_ok         = false;
+    char     lua_msg[160]   = { 0 };
+    char     lua_out[2048]  = { 0 };
 
     // 活动战斗
     bool     act_ready    = false;
@@ -103,6 +121,10 @@ struct Requests
     bool act_kill_all = false;
     bool act_scan_again = false;
     bool act_refresh = false;
+    bool lua_scan = false;
+    bool lua_exec = false;
+    bool lua_trust = false;
+    std::string lua_code;
 };
 
 Requests& Req();

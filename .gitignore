@@ -22,3 +22,6 @@ __pycache__/
 # 本地备份 / 测试产物
 *.bak
 sdk/*.exe
+
+# MCP 运行时数据
+mcp_file/

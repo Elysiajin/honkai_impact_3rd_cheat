@@ -5,6 +5,8 @@
 #include "saphire_colors.h"
 #include "imgui_internal.h"
 
+#include "../ov_mcp.h"
+
 #include <cstdio>
 
 namespace ui
@@ -15,11 +17,13 @@ static const char* kNames[] = {
     "ESP",
     "战斗相关",
     "游戏活动",
+    "Lua 控制台",
+    "MCP 服务",
     "UI界面",
     "关于本项目",
 };
 
-static const char* kIcons[] = { "A", "B", "C", "D", "E", "F" };
+static const char* kIcons[] = { "A", "B", "C", "D", "G", "H", "E", "F" };
 
 const char* PageName(Page p)
 {
@@ -332,6 +336,34 @@ void PageUi()
     {
         KeyValue("开关", "INSERT");
         KeyValue("关闭", "左上角 X");
+    }
+    CardEnd();
+
+    CardGap();
+
+    if (Card("MCP 服务", ImVec2(272.0f, 260.0f)))
+    {
+        ToggleRow("启用 MCP", &Cfg().mcp_on);
+        ImGui::InputInt("监听端口", &Cfg().mcp_port, 1, 100);
+        if (Cfg().mcp_port < 1024) Cfg().mcp_port = 1024;
+        if (Cfg().mcp_port > 65535) Cfg().mcp_port = 65535;
+
+        const int st = ovmcp::State();
+        const char* txt = "已停止";
+        if (st == 1) txt = "启动中";
+        else if (st == 2) txt = "运行中";
+        else if (st == 3) txt = "停止中";
+        KeyValue("状态", txt);
+        if (st == 2)
+        {
+            snprintf(buf, sizeof buf, "http://127.0.0.1:%u/mcp", (unsigned)ovmcp::Port());
+            KeyValue("地址", buf);
+        }
+        const std::string e = ovmcp::Error();
+        if (!e.empty()) Hint(e.c_str());
+        snprintf(buf, sizeof buf, "%d", ovmcp::ToolCount());
+        KeyValue("工具数", buf);
+        Hint("大块数据落盘到 mcp_file");
     }
     CardEnd();
 

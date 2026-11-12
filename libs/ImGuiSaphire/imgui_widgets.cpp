@@ -2217,11 +2217,11 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, float val, 
         it_anim = anim.find(id);
     }
 
-    // переписываем опен комбо систему
+    // РїРµСЂРµРїРёСЃС‹РІР°РµРј РѕРїРµРЅ РєРѕРјР±Рѕ СЃРёСЃС‚РµРјСѓ
     if (hovered && g.IO.MouseClicked[0] || it_anim->second.opened_combo && g.IO.MouseClicked[0] && !it_anim->second.hovered)
         it_anim->second.opened_combo = !it_anim->second.opened_combo;
 
-    // размер комбо == кол-во элементов * на размер одного элемента (val * 17), также надо учитывать паддинги, поэтому прибавляем ещё 13
+    // СЂР°Р·РјРµСЂ РєРѕРјР±Рѕ == РєРѕР»-РІРѕ СЌР»РµРјРµРЅС‚РѕРІ * РЅР° СЂР°Р·РјРµСЂ РѕРґРЅРѕРіРѕ СЌР»РµРјРµРЅС‚Р° (val * 17), С‚Р°РєР¶Рµ РЅР°РґРѕ СѓС‡РёС‚С‹РІР°С‚СЊ РїР°РґРґРёРЅРіРё, РїРѕСЌС‚РѕРјСѓ РїСЂРёР±Р°РІР»СЏРµРј РµС‰С‘ 13
     it_anim->second.combo_size = ImLerp(it_anim->second.combo_size, it_anim->second.opened_combo ? 17 * val * 2 + 10 : 0.f, g.IO.DeltaTime * 8.f);
 
     it_anim->second.text_color = ImLerp(it_anim->second.text_color, it_anim->second.opened_combo ? c::text_active : hovered ? c::text_hov : c::text, g.IO.DeltaTime * 6.f);
@@ -2242,17 +2242,17 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, float val, 
 
     window->DrawList->AddText(ImVec2(bb.Max.x - w - 54, bb.Min.y - 25), GetColorU32(it_anim->second.text_color), label);
 
-    // проверка на открытое комбо
+    // РїСЂРѕРІРµСЂРєР° РЅР° РѕС‚РєСЂС‹С‚РѕРµ РєРѕРјР±Рѕ
     if (!it_anim->second.opened_combo && it_anim->second.combo_size < 2.f)
         return false;
 
-    // устанавливаем позицию
+    // СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј РїРѕР·РёС†РёСЋ
     ImGui::SetNextWindowPos(ImVec2(bb.Min.x, bb.Max.y + 4));
 
-    // устанавливаем размер
+    // СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј СЂР°Р·РјРµСЂ
     ImGui::SetNextWindowSize(ImVec2(bb.GetWidth(), it_anim->second.combo_size));
 
-    // необходимые флаги, теперь мы создаем не popup, а обычное окно.
+    // РЅРµРѕР±С…РѕРґРёРјС‹Рµ С„Р»Р°РіРё, С‚РµРїРµСЂСЊ РјС‹ СЃРѕР·РґР°РµРј РЅРµ popup, Р° РѕР±С‹С‡РЅРѕРµ РѕРєРЅРѕ.
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoScrollWithMouse;
     PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(g.Style.FramePadding.x, g.Style.WindowPadding.y - 30));
     PushStyleColor(ImGuiCol_WindowBg, GetColorU32(c::combo_background));
@@ -2262,7 +2262,7 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, float val, 
 
     it_anim->second.hovered = IsWindowHovered();
 
-    // если у нас мультикомбо, то нам не надо закрывать его при нажатии на элемент, поэтому делаем проверку
+    // РµСЃР»Рё Сѓ РЅР°СЃ РјСѓР»СЊС‚РёРєРѕРјР±Рѕ, С‚Рѕ РЅР°Рј РЅРµ РЅР°РґРѕ Р·Р°РєСЂС‹РІР°С‚СЊ РµРіРѕ РїСЂРё РЅР°Р¶Р°С‚РёРё РЅР° СЌР»РµРјРµРЅС‚, РїРѕСЌС‚РѕРјСѓ РґРµР»Р°РµРј РїСЂРѕРІРµСЂРєСѓ
     if (multi)
     {
         if (IsMouseHoveringRect(GetWindowPos(), GetWindowPos() + GetWindowSize()) && g.IO.MouseClicked[0])
@@ -2276,7 +2276,7 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags 
 
 void ImGui::EndCombo()
 {
-    // т.к мы создаём не popup, а обычное окно, то и закрывать его должны не с помощью EndPopup, а с помощью End
+    // С‚.Рє РјС‹ СЃРѕР·РґР°С‘Рј РЅРµ popup, Р° РѕР±С‹С‡РЅРѕРµ РѕРєРЅРѕ, С‚Рѕ Рё Р·Р°РєСЂС‹РІР°С‚СЊ РµРіРѕ РґРѕР»Р¶РЅС‹ РЅРµ СЃ РїРѕРјРѕС‰СЊСЋ EndPopup, Р° СЃ РїРѕРјРѕС‰СЊСЋ End
     End();
 }
 
@@ -4715,7 +4715,9 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         PushStyleVar(ImGuiStyleVar_ChildBorderSize, style.FrameBorderSize);
         PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0)); // Ensure no clip rect so mouse hover can reach FramePadding edges
         bool child_visible = BeginChildEx(label, id, frame_bb.GetSize(), true, ImGuiWindowFlags_NoMove);
-        PopStyleVar(3);
+        // дїќз•™ WindowPadding иї™дёЂе±‚пјЊз”±еђЋйќўзљ„ EndChild() иґџиґЈеј№е‡єпј›
+        // еђ¦е€™ EndChild() дјље¤љеј№дёЂж¬Ўж ·ејЏж €пјЊеЇји‡ґ PopStyleVar underflowгЂ‚
+        PopStyleVar(2);
         PopStyleColor();
         if (!child_visible)
         {
