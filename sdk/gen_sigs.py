@@ -11,9 +11,9 @@ from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 from dump import Dump, UA_BASE
 
 SIGS = [
-    ("is_sp_enough", 27, 0x08011F70),
-    ("get_skill_cd", 28, 0x08009530),
-    ("is_skill_has_cd", 29, 0x080152A0),
+    ("is_sp_enough", 28, 0x08011F70),
+    ("get_skill_cd", 29, 0x08009530),
+    ("is_skill_has_cd", 30, 0x080152A0),
 ]
 
 TAKE = 32

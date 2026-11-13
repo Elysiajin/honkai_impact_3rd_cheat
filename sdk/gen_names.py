@@ -19,6 +19,7 @@ SYMBOLS = {
     "crit_main": ("MHEMGJMNDJI", "TryApplyCrit"),
     "crit_phys": ("MHEMGJMNDJI", "TryApplyPhysicCrit"),
     "crit_elem": ("MHEMGJMNDJI", "TryApplyElementCrit"),
+    "dmg_final": ("MHEMGJMNDJI", "ResolveAttackDataFinal"),
     "anim_speed_apply": ("BaseMonoAnimatorEntity", "ApplyOverrideAnimatorSpeed"),
     "anim_speed_cancel": ("BaseMonoAnimatorEntity", "CancelOverrideAnimatorSpeed"),
 }
@@ -79,7 +80,7 @@ def main():
                 cls = c
                 tok = next(iter(hits))
         elif key.startswith("ultra"):
-            c = ULTRA[i - 15]
+            c = ULTRA[int(key[5:])]
             hits = tokens.get((c, "AllowUseUltra"))
             if hits and len(hits) == 1:
                 cls = c
@@ -87,19 +88,18 @@ def main():
         else:
             missing.append(key)
 
-        if cls:
-            if key in ("crit_main", "crit_phys", "crit_elem"):
-                fname = SYMBOLS[key][1]
-                need = None
-                for row in csv.DictReader(
-                        open(os.path.join(HERE, "bh3_methods_named.tsv"),
-                             encoding="utf-8", errors="replace"),
-                        delimiter="\t"):
-                    if row["class"] == cls and row["method"] == fname and int(row["rva"], 0):
-                        need = int(row["rva"], 0)
-                        break
-                if need:
-                    delta = e["rva"] - need
+        if cls and key in SYMBOLS:
+            fname = SYMBOLS[key][1]
+            need = None
+            for row in csv.DictReader(
+                    open(os.path.join(HERE, "bh3_methods_named.tsv"),
+                         encoding="utf-8", errors="replace"),
+                    delimiter="\t"):
+                if row["class"] == cls and row["method"] == fname and int(row["rva"], 0):
+                    need = int(row["rva"], 0)
+                    break
+            if need:
+                delta = e["rva"] - need
 
         rows.append((cls, tok, delta))
 

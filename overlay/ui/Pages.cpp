@@ -227,7 +227,7 @@ void PageBattle()
     {
         ToggleRow("启用无敌", &Cfg().god);
         Mark(Cfg().god && St().god_applied);
-        Hint("仅拦截受击入口，不修改生命值");
+        Hint("屏蔽受击表现，并把最终伤害归零");
     }
     CardEnd();
 
@@ -282,6 +282,35 @@ void PageBattle()
         KeyValue("累计秒杀", buf);
         if (ImGui::Button("秒杀全部", ImVec2(227.0f * S(), 37.0f * S())))
             ask_kill = true;
+    }
+    CardEnd();
+
+    CardGap();
+
+    if (Card("伤害倍率", ImVec2(272.0f, 270.0f)))
+    {
+        ToggleRow("启用伤害倍率", &Cfg().dmg_on);
+        ImGui::SliderFloat("最终伤害倍率", &Cfg().dmg_mult, 1.0f, 1000.0f, "%.1f x",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::SetNextItemWidth(150.0f * S());
+        ImGui::InputFloat("自定义倍率", &Cfg().dmg_mult, 0.0f, 0.0f, "%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit())
+        {
+            if (!(Cfg().dmg_mult >= 1.0f)) Cfg().dmg_mult = 1.0f;
+            if (Cfg().dmg_mult > 1000.0f) Cfg().dmg_mult = 1000.0f;
+        }
+        Mark(Cfg().dmg_on && St().dmg_applied);
+        Hint("滑动条与输入框共用同一数值，范围 1.0-1000.0");
+    }
+    CardEnd();
+
+    CardGap();
+
+    if (Card("一击必杀", ImVec2(272.0f, 140.0f)))
+    {
+        ToggleRow("启用一击必杀", &Cfg().ohk);
+        Mark(Cfg().ohk && St().ohk_applied);
+        Hint("命中怪物时直接造成 10 亿伤害，优先于伤害倍率");
     }
     CardEnd();
 
@@ -388,6 +417,7 @@ void PageAbout()
 
     if (Card("说明", ImVec2(272.0f, 210.0f)))
     {
+		Hint("本项目初衷是为了减少无效的游戏体验与时间");
 		Hint("请在单机环境下进行游玩使用！");
         Hint("禁止以此破坏玩家竞争，联机等体验");
     }

@@ -23,6 +23,7 @@ static const uint32_t kTokens[] =
     0x06003B87u,   // crit_main  rva=0x0793FBBF  token=0x06003B87
     0x06003B89u,   // crit_phys  rva=0x0793FFCD  token=0x06003B89
     0x06003B88u,   // crit_elem  rva=0x07940081  token=0x06003B88
+    0x06003B8Au,   // dmg_final  rva=0x0794065E  token=0x06003B8A
     0x0600B03Cu,   // anim_speed_apply  rva=0x099646E0  token=0x0600B03C
     0x0600B03Du,   // anim_speed_cancel  rva=0x09964930  token=0x0600B03D
     0x0600AB8Cu,   // ultra0  rva=0x09BAE670  token=0x0600AB8C
@@ -44,6 +45,6 @@ static const uint32_t kTokens[] =
     0x00000000u,   // monster_mgr_global  rva=0x02642EA8  token=无
 };
 
-constexpr int kTokenCount = 32;
+constexpr int kTokenCount = 33;
 
 } // namespace ovp

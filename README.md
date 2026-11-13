@@ -41,7 +41,7 @@ cd overlay
 build_overlay.bat
 ```
 
-产物 `overlay/bh3_overlay.dll`（已入库，可直接注入）。
+产物 `overlay/bh3_overlay.dll`（二进制不入库，需本地编译）。
 MCP 与反汇编依赖已预编译在 `..\..\cxxmcp-build-mingw`、`..\..\zydis-build-mingw`。
 
 ## 使用

@@ -3540,8 +3540,14 @@ bool ImGui::SliderScalar(const char* label, ImGuiDataType data_type, void* p_dat
     const char* value_buf_end = value_buf + DataTypeFormatString(value_buf, IM_ARRAYSIZE(value_buf), data_type, p_data, format);
 
     PushStyleColor(ImGuiCol_Text, GetColorU32(it_anim->second.text_color));
-    RenderTextClipped(frame_bb2.Min + ImVec2(20, -20), frame_bb2.Min + ImVec2(100, 0), value_buf, value_buf_end, NULL, ImVec2(1.0f, 0.5f));
-    if (label_size.x > 0.0f) RenderText(ImVec2(frame_bb.Max.x - w - 65, frame_bb.Min.y - 8), label);
+    const ImVec2 label_pos(frame_bb2.Min.x, frame_bb.Min.y - 8.0f);
+    if (label_size.x > 0.0f)
+        RenderText(label_pos, label);
+    // 数值右对齐放在标签同一行，空间不足时裁剪而不是压住标签
+    const float value_x0 = ImClamp(label_pos.x + label_size.x + 8.0f, label_pos.x, frame_bb2.Max.x - 4.0f);
+    RenderTextClipped(ImVec2(value_x0, label_pos.y),
+                      ImVec2(frame_bb2.Max.x - 4.0f, label_pos.y + label_size.y),
+                      value_buf, value_buf_end, NULL, ImVec2(1.0f, 0.0f));
     PopStyleColor();
 
     IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags);

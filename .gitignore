@@ -23,5 +23,10 @@ __pycache__/
 *.bak
 sdk/*.exe
 
+# 编译产物：二进制不入库，仅保留源码
+overlay/*.dll
+overlay/*.pdb
+overlay/*.o
+
 # MCP 运行时数据
 mcp_file/

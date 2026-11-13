@@ -429,6 +429,144 @@ inline bool hundred_crit(ov::Data& d, bool on) {
     return true;
 }
 
+// 伤害 hook：ResolveAttackDataFinal 收尾处处理怪物倍率/一击必杀与玩家免伤。
+// 怪物 Actor 类名 AIOM/HAME；玩家 Actor 类名 PLKH/PIDF/FALI。
+static uint8_t g_dmg_bak[13] = { 0 };
+static bool g_dmg_on = false;
+static void* g_dmg_stub = nullptr;
+static volatile float g_dmg_mult = 1.0f;
+static volatile uint32_t g_dmg_flags = 0;
+
+static constexpr uint32_t kDmgFlagMult = 1u;
+static constexpr uint32_t kDmgFlagGod = 2u;
+static constexpr uint32_t kDmgFlagOhk = 4u;
+
+inline bool dmg_build_stub(uintptr_t resume) {
+    if (g_dmg_stub) return true;
+    static const uint8_t kHead[13] = {
+        0xC7, 0x86, 0x9C, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x48, 0x85, 0xFF
+    };
+    static const uint32_t kOffs[4] = { 0x90, 0x80, 0x9C, 0x64 };
+    static const uint32_t kOhkBits = 0x4E6E6B28u; // 1e9f
+
+    uint8_t code[512] = { 0 };
+    uint8_t* p = code;
+    uint8_t* L_orig = nullptr;
+    uint8_t* L_monster = nullptr;
+    uint8_t* L_player = nullptr;
+    uint8_t* L_ohk = nullptr;
+
+    struct Fix { uint8_t* at; uint8_t** label; };
+    Fix fx[24];
+    int nfx = 0;
+
+    auto em8 = [&](uint8_t v) { *p++ = v; };
+    auto em32 = [&](uint32_t v) { memcpy(p, &v, 4); p += 4; };
+    auto em64 = [&](uint64_t v) { memcpy(p, &v, 8); p += 8; };
+    auto jmp32 = [&](uint8_t*& lab) { em8(0xE9); fx[nfx].at = p; fx[nfx].label = &lab; ++nfx; p += 4; };
+    auto je32 = [&](uint8_t*& lab) { em8(0x0F); em8(0x84); fx[nfx].at = p; fx[nfx].label = &lab; ++nfx; p += 4; };
+    auto jne32 = [&](uint8_t*& lab) { em8(0x0F); em8(0x85); fx[nfx].at = p; fx[nfx].label = &lab; ++nfx; p += 4; };
+    auto cmp_name = [&](uint32_t v) { em8(0x81); em8(0x38); em32(v); };
+
+    em8(0x48); em8(0x85); em8(0xFF);                // test rdi,rdi
+    je32(L_orig);
+    em8(0x48); em8(0x8B); em8(0x07);                // rax = klass
+    em8(0x48); em8(0x8B); em8(0x40); em8(0x20);     // rax = name
+    cmp_name(0x4D4F4941u); je32(L_monster);         // AIOM
+    cmp_name(0x454D4148u); je32(L_monster);         // HAME
+    cmp_name(0x484B4C50u); je32(L_player);          // PLKH
+    cmp_name(0x46444950u); je32(L_player);          // PIDF
+    cmp_name(0x494C4146u); je32(L_player);          // FALI
+    jmp32(L_orig);
+
+    L_monster = p;
+    em8(0x48); em8(0xB8); em64((uint64_t)(uintptr_t)&g_dmg_flags);
+    em8(0xF6); em8(0x00); em8(0x04);                // 一击必杀优先
+    jne32(L_ohk);
+    em8(0xF6); em8(0x00); em8(0x01);                // 伤害倍率
+    je32(L_orig);
+    em8(0x48); em8(0xB8); em64((uint64_t)(uintptr_t)&g_dmg_mult);
+    em8(0xF3); em8(0x0F); em8(0x10); em8(0x00);
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t off = kOffs[i];
+        em8(0xF3); em8(0x0F); em8(0x10); em8(0x8E); em32(off);
+        em8(0xF3); em8(0x0F); em8(0x59); em8(0xC8);
+        em8(0xF3); em8(0x0F); em8(0x11); em8(0x8E); em32(off);
+    }
+    jmp32(L_orig);
+
+    L_ohk = p;
+    for (int i = 0; i < 4; ++i) {
+        em8(0xC7); em8(0x86); em32(kOffs[i]); em32(i == 0 ? kOhkBits : 0u);
+    }
+    jmp32(L_orig);
+
+    L_player = p;
+    em8(0x48); em8(0xB8); em64((uint64_t)(uintptr_t)&g_dmg_flags);
+    em8(0xF6); em8(0x00); em8(0x02);                // 真无敌
+    je32(L_orig);
+    for (int i = 0; i < 4; ++i) {
+        em8(0xC7); em8(0x86); em32(kOffs[i]); em32(0);
+    }
+    jmp32(L_orig);
+
+    L_orig = p;
+    memcpy(p, kHead, 13); p += 13;
+    em8(0x48); em8(0xB8); em64((uint64_t)resume);
+    em8(0xFF); em8(0xE0);
+
+    for (int i = 0; i < nfx; ++i) {
+        const int32_t rel = (int32_t)((int64_t)(*fx[i].label - (fx[i].at + 4)));
+        memcpy(fx[i].at, &rel, 4);
+    }
+
+    void* mem = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!mem) return false;
+    const size_t n = (size_t)(p - code);
+    memcpy(mem, code, n);
+    FlushInstructionCache(GetCurrentProcess(), mem, n);
+    DWORD old = 0;
+    VirtualProtect(mem, n, PAGE_EXECUTE_READ, &old);
+    g_dmg_stub = mem;
+    return true;
+}
+
+inline bool damage_hook(ov::Data& d, bool mult_on, float mult, bool god_on, bool ohk_on) {
+    if (!(mult >= 1.0f)) mult = 1.0f;
+    if (mult > 1000.0f) mult = 1000.0f;
+    g_dmg_mult = mult;
+    g_dmg_flags = (mult_on ? kDmgFlagMult : 0u) |
+                  (god_on ? kDmgFlagGod : 0u) |
+                  (ohk_on ? kDmgFlagOhk : 0u);
+
+    const bool want = g_dmg_flags != 0;
+    if (want == g_dmg_on) return true;
+
+    const uint32_t rv = ovp::Rva(ovp::SymDmgFinal);
+    if (!rv) return false;
+    uintptr_t at = d.ua + rv;
+    if (want) {
+        static const uint8_t kHead[13] = {
+            0xC7, 0x86, 0x9C, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x48, 0x85, 0xFF
+        };
+        uint8_t cur[13] = { 0 };
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(), (void*)at, cur, 13, &got) || got != 13)
+            return false;
+        if (memcmp(cur, kHead, 13) != 0) return false;
+        if (!dmg_build_stub(at + 13)) return false;
+        uint8_t patch[13] = { 0x48, 0xB8 };
+        const uint64_t stub = (uint64_t)(uintptr_t)g_dmg_stub;
+        memcpy(&patch[2], &stub, 8);
+        patch[10] = 0xFF; patch[11] = 0xE0; patch[12] = 0x90;
+        if (!write_code(at, patch, 13, g_dmg_bak)) return false;
+    } else {
+        if (!write_code(at, g_dmg_bak, 13, nullptr)) return false;
+    }
+    g_dmg_on = want;
+    return true;
+}
+
 // 倍攻：按倍率覆盖角色 Animator 播放速度，关闭时恢复游戏原速。
 inline bool attack_speed(ov::Data& d, const State& s, bool on, float mult) {
     if (!on) {
@@ -471,8 +609,11 @@ inline bool attack_speed(ov::Data& d, const State& s, bool on, float mult) {
 inline bool sp_applied() { return g_sp_on; }
 inline bool cd_applied() { return g_cd_ui_on && g_cd_uican_on && g_cd_actor_on; }
 inline bool crit_applied() { return g_crit_main_on && g_crit_phys_on && g_crit_elem_on; }
+inline bool dmg_applied() { return g_dmg_on; }
+inline bool ohk_applied() { return g_dmg_on && (g_dmg_flags & kDmgFlagOhk) != 0; }
+inline bool god_true_applied() { return g_dmg_on && (g_dmg_flags & kDmgFlagGod) != 0; }
 inline bool atk_speed_applied() { return g_atk_speed_on; }
-inline bool god_applied() { return g_behit_on; }
+inline bool god_applied() { return g_behit_on && god_true_applied(); }
 
 inline int64_t kill_all(ov::Data& d, const State& s) {
     const uint32_t rv = ovp::Rva(ovp::SymDieNow);

@@ -46,6 +46,7 @@ METHODS = [
     ("crit_main", "MHEMGJMNDJI", "TryApplyCrit", 0x6F, 8),
     ("crit_phys", "MHEMGJMNDJI", "TryApplyPhysicCrit", 0x3D, 8),
     ("crit_elem", "MHEMGJMNDJI", "TryApplyElementCrit", 0x41, 8),
+    ("dmg_final", "MHEMGJMNDJI", "ResolveAttackDataFinal", 0x53E, 13),
     ("anim_speed_apply", "BaseMonoAnimatorEntity", "ApplyOverrideAnimatorSpeed", 0, 16),
     ("anim_speed_cancel", "BaseMonoAnimatorEntity", "CancelOverrideAnimatorSpeed", 0, 16),
 ] + [("ultra%d" % i, cls, "AllowUseUltra", 0, 16) for i, cls in enumerate(ULTRA_CLASSES)]

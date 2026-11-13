@@ -21,6 +21,9 @@ struct Settings
     bool  crit      = false;
     bool  atk_on    = false;
     float atk_mult  = 2.0f;
+    bool  dmg_on    = false;
+    float dmg_mult  = 2.0f;
+    bool  ohk       = false;
 
     float esp_h     = 1.7f;
     float max_dist  = 300.0f;
@@ -78,6 +81,8 @@ struct Status
     bool     no_cd_applied  = false;
     bool     crit_applied   = false;
     bool     atk_speed_applied = false;
+    bool     dmg_applied    = false;
+    bool     ohk_applied    = false;
     uint64_t stamp        = 0;
 
     // Lua 控制台

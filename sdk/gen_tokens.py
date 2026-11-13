@@ -50,6 +50,7 @@ SYMBOLS = {
     "crit_main": ("MHEMGJMNDJI", "TryApplyCrit"),
     "crit_phys": ("MHEMGJMNDJI", "TryApplyPhysicCrit"),
     "crit_elem": ("MHEMGJMNDJI", "TryApplyElementCrit"),
+    "dmg_final": ("MHEMGJMNDJI", "ResolveAttackDataFinal"),
     "anim_speed_apply": ("BaseMonoAnimatorEntity", "ApplyOverrideAnimatorSpeed"),
     "anim_speed_cancel": ("BaseMonoAnimatorEntity", "CancelOverrideAnimatorSpeed"),
 }

@@ -247,6 +247,8 @@ static void tick_game_thread() {
         if (cfg.inf_sp != ovn::sp_applied()) ovn::infinite_sp(g_data, cfg.inf_sp);
         if (cfg.no_cd != ovn::cd_applied()) ovn::no_skill_cd(g_data, cfg.no_cd);
         if (cfg.crit != ovn::crit_applied()) ovn::hundred_crit(g_data, cfg.crit);
+        if (cfg.dmg_on || cfg.god || cfg.ohk || ovn::dmg_applied())
+            ovn::damage_hook(g_data, cfg.dmg_on, cfg.dmg_mult, cfg.god, cfg.ohk);
         if (cfg.atk_on) ovn::attack_speed(g_data, g_game_nv, true, cfg.atk_mult);
         else if (ovn::atk_speed_applied()) ovn::attack_speed(g_data, g_game_nv, false, 1.0f);
         if (rq.kill_all && g_game_nv.cam_ok && !g_game_nv.avatars.empty())
@@ -313,10 +315,12 @@ static void tick_game_thread() {
     st.data_ready = g_data_ready;
     st.class_count = g_data.count;
     st.ua = g_data.ua;
-    st.god_applied = g_god_state.load();
+    st.god_applied = g_god_state.load() && ovn::god_true_applied();
     st.inf_sp_applied = ovn::sp_applied();
     st.no_cd_applied = ovn::cd_applied();
     st.crit_applied = ovn::crit_applied();
+    st.dmg_applied = ovn::dmg_applied();
+    st.ohk_applied = ovn::ohk_applied();
     st.atk_speed_applied = ovn::atk_speed_applied();
 
     ovmcp::UpdateGameStatus(g_data.ua, g_data_ready,
