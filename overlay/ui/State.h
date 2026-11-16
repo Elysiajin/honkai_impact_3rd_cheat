@@ -33,12 +33,19 @@ struct Settings
     bool  esp_bold  = true;
     float esp_off   = 6.0f;
 
-    float ui_scale  = 1.0f;
+    float ui_scale  = 1.30f;
     bool  anim_on   = true;
     bool  show_grid = true;
     int   page      = 0;
     bool  esp_smooth = true;
     bool  esp_team  = true;
+    bool  gadget_on = true;
+    bool  npc_on    = true;
+    bool  ray_on    = true;
+    float ray_w     = 2.0f;
+    bool  tp_on     = true;
+    float gadget_col[4] = { 1.00f, 0.80f, 0.20f, 1.00f };
+    float npc_col[4]    = { 0.20f, 1.00f, 1.00f, 1.00f };
 
     // 活动战斗
     int   act_pick   = 0;      // 0=相遇·回忆玩具小屋
@@ -65,6 +72,8 @@ struct Status
     uintptr_t monster_mgr = 0;
     int      avatar_n     = 0;
     int      monster_n    = 0;
+    int      gadget_n     = 0;
+    int      npc_n        = 0;
 
     bool     cam_ok       = false;
     uintptr_t camera      = 0;

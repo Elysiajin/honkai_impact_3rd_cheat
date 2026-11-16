@@ -306,6 +306,8 @@ static void tick_game_thread() {
     st.monster_mgr = g_game_nv.monster_mgr;
     st.avatar_n = (int)g_game_nv.avatars.size();
     st.monster_n = (int)g_game_nv.monsters.size();
+    st.gadget_n = (int)g_game_nv.gadgets.size();
+    st.npc_n = (int)g_game_nv.npcs.size();
     st.cam_ok = g_game_nv.cam_ok;
     st.camera = g_game_nv.camera;
     st.cam_w = g_game_nv.w;
@@ -635,6 +637,10 @@ static void draw_esp(float dt) {
     const ImU32 col = ImGui::ColorConvertFloat4ToU32(
         ImVec4(cfg.esp_col[0], cfg.esp_col[1], cfg.esp_col[2], cfg.esp_col[3]));
     const ImU32 col_team = IM_COL32(90, 220, 140, 235);
+    const ImU32 col_gadget = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(cfg.gadget_col[0], cfg.gadget_col[1], cfg.gadget_col[2], cfg.gadget_col[3]));
+    const ImU32 col_npc = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(cfg.npc_col[0], cfg.npc_col[1], cfg.npc_col[2], cfg.npc_col[3]));
 
     const bool show_box  = cfg.esp_box;
     const bool show_name = cfg.esp_name;
@@ -649,12 +655,28 @@ static void draw_esp(float dt) {
     const float fsz = f ? (cfg.esp_font > 1.0f ? cfg.esp_font : (f ? f->FontSize : 20.0f)) : 20.0f;
 
     const int li = find_local_avatar(s);
-    const float* ref = (li >= 0) ? &s.avatars[(size_t)li].x : s.cam_pos;
+    const bool avatar_pos_ok = li >= 0 &&
+        (fabsf(s.avatars[(size_t)li].x) + fabsf(s.avatars[(size_t)li].y) +
+         fabsf(s.avatars[(size_t)li].z)) > 0.01f;
+    const float* ref = s.player_ok ? s.player_pos :
+        (avatar_pos_ok ? &s.avatars[(size_t)li].x : s.cam_pos);
+    const bool ref_ok = (fabsf(ref[0]) + fabsf(ref[1]) + fabsf(ref[2])) > 0.01f;
 
     smooth_prune(now);
 
     int drawn = 0;
     char line[192];
+
+    // 从屏幕顶部中心到目标框顶边中心的射线。
+    float ray_w = cfg.ray_w;
+    if (!(ray_w >= 0.5f)) ray_w = 0.5f;
+    if (ray_w > 12.0f) ray_w = 12.0f;
+    auto ray_to = [&](const ImVec2& a, const ImVec2& b) {
+        if (!cfg.ray_on) return;
+        dl->AddLine(ImVec2(sw * 0.5f, 0.0f),
+                    ImVec2((a.x + b.x) * 0.5f, a.y),
+                    IM_COL32(210, 220, 255, 70), ray_w);
+    };
 
     for (const auto& e : s.monsters) {
         float bx = 0, by = 0, bw = 0, bh = 0;
@@ -668,6 +690,7 @@ static void draw_esp(float dt) {
         ImVec2 a(x - w * 0.5f, y), b(x + w * 0.5f, y + h);
         if (b.x < -32.0f || a.x > sw + 32.0f || b.y < -32.0f || a.y > sh + 32.0f) continue;
 
+        ray_to(a, b);
         if (show_box) draw_box(dl, a, b, col);
         if (show_name) {
             const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
@@ -702,6 +725,7 @@ static void draw_esp(float dt) {
             ImVec2 a(x - w * 0.5f, y), b(x + w * 0.5f, y + h);
             if (b.x < -32.0f || a.x > sw + 32.0f || b.y < -32.0f || a.y > sh + 32.0f) continue;
 
+            ray_to(a, b);
             if (show_box) draw_box(dl, a, b, col_team);
             if (show_name) {
                 if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", e.name.c_str(), dist);
@@ -719,6 +743,40 @@ static void draw_esp(float dt) {
             if (++drawn >= 400) break;
         }
     }
+
+    auto draw_pjms_list = [&](const std::vector<ovn::Ent>& list, ImU32 color, float height) {
+        for (const auto& e : list) {
+            float bx = 0, by = 0, bw = 0, bh = 0;
+            if (!project_ent(s, sw, sh, e.x, e.y, e.z, height, bx, by, bw, bh)) continue;
+            const float dist = dist_between(ref, e.x, e.y, e.z);
+            if (ref_ok && dist > maxd) continue;
+            float x = bx, y = by, w = bw, hh = bh;
+            smooth_apply(e.p, x, y, w, hh, now, dt, smooth);
+            ImVec2 a(x - w * 0.5f, y), b(x + w * 0.5f, y + hh);
+            if (b.x < -32.0f || a.x > sw + 32.0f || b.y < -32.0f || a.y > sh + 32.0f) continue;
+
+            ray_to(a, b);
+            if (show_box) draw_box(dl, a, b, color);
+            if (show_name) {
+                const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
+                if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", nm, dist);
+                else           snprintf(line, sizeof line, "%s", nm);
+                const ImVec2 ts = f->CalcTextSizeA(fsz, FLT_MAX, 0.0f, line, nullptr);
+                const float tx = (a.x + b.x) * 0.5f - ts.x * 0.5f;
+                const float ty = a.y - ts.y - cfg.esp_off;
+                const ImU32 sh = IM_COL32(0, 0, 0, 200);
+                dl->AddText(f, fsz, ImVec2(tx - 1.0f, ty), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx + 1.0f, ty), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx, ty - 1.0f), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx, ty + 1.0f), sh, line);
+                dl->AddText(f, fsz, ImVec2(tx, ty), color, line);
+            }
+            if (++drawn >= 400) break;
+        }
+    };
+    if (cfg.gadget_on) draw_pjms_list(s.gadgets, col_gadget, 0.8f);
+    if (cfg.gadget_on) draw_pjms_list(s.props, col_gadget, 0.8f);
+    if (cfg.npc_on)    draw_pjms_list(s.npcs, col_npc, esp_h);
 
     ui::St().esp_drawn = drawn;
 }
@@ -753,9 +811,9 @@ static void render_overlay(IDXGISwapChain* sc) {
     }
     if (!g_gui_ready) init_gui(sc);
     if (g_gui_ready) {
-        static bool pk[8] = { false };
-        const int keys[8] = { VK_INSERT, VK_F3, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10 };
-        for (int i = 0; i < 8; ++i) {
+        static bool pk[9] = { false };
+        const int keys[9] = { VK_INSERT, VK_F3, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11 };
+        for (int i = 0; i < 9; ++i) {
             bool down = (GetAsyncKeyState(keys[i]) & 0x8000) != 0;
             bool pressed = down && !pk[i];
             pk[i] = down;
@@ -777,6 +835,8 @@ static void render_overlay(IDXGISwapChain* sc) {
                 cfg.crit = !cfg.crit;
             } else if (keys[i] == VK_F10) {
                 cfg.atk_on = !cfg.atk_on;
+            } else if (keys[i] == VK_F11) {
+                if (cfg.tp_on) ovn::teleport_req().store(true);
             }
         }
 

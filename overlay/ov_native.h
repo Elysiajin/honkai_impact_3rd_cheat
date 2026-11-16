@@ -2,6 +2,7 @@
 #include "ov_data.h"
 
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +28,14 @@ struct State {
     bool ready = false;
     uintptr_t avatar_mgr = 0, monster_mgr = 0;
     std::vector<Ent> monsters, avatars;
+    std::vector<Ent> gadgets, npcs, props;
+    uint64_t pjms_t = 0;
+    bool pjms_sync_done = false;
+    uintptr_t prop_k = 0;
+    float player_pos[3] = { 0, 0, 0 };
+    bool player_ok = false;
+    uint64_t player_t = 0;
+    std::vector<uintptr_t> skipped;
     bool cam_ok = false;
     bool vp_valid = false;
     uintptr_t camera = 0;
@@ -139,7 +148,17 @@ inline bool w2s(const float VP[16], float x, float y, float z, float W, float H,
 }
 
 inline void cam_pos_from_v(const float V[16], float out[3]) {
-    const float tx = V[12], ty = V[13], tz = V[14];
+    // 不同场景/相机层返回的矩阵可能是行主序或列主序：
+    // 行主序平移在 V[3],V[7],V[11]；列主序在 V[12],V[13],V[14]。
+    // 用较大的那一组，避免把平移读成 0 导致距离变成“到原点的距离”。
+    const float row_t = fabsf(V[3]) + fabsf(V[7]) + fabsf(V[11]);
+    const float col_t = fabsf(V[12]) + fabsf(V[13]) + fabsf(V[14]);
+    float tx, ty, tz;
+    if (row_t > col_t && row_t > 1e-4f) {
+        tx = V[3]; ty = V[7]; tz = V[11];
+    } else {
+        tx = V[12]; ty = V[13]; tz = V[14];
+    }
     out[0] = -(V[0] * tx + V[4] * ty + V[8] * tz);
     out[1] = -(V[1] * tx + V[5] * ty + V[9] * tz);
     out[2] = -(V[2] * tx + V[6] * ty + V[10] * tz);
@@ -223,6 +242,269 @@ inline bool cam_fast(ov::Data& d, State& s) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// PJMS 世界对象（第二部城市/开放世界）。以下偏移来自本 build 的真机 MCP 只读验证：
+//   PJMSGadgetActor  klass 0x5000113E560 (tdi 74105/0x12179)
+//   PJMSNPCActor     klass 0x5000113FE58 (tdi 74163/0x121B3)
+//   PJMSBaseActor._position        = +0x98
+//   PJMSGadgetActor._gadgetConfig  = +0xD8
+//   PJMSGadgetConfig.ActionGraphPath = +0x20
+// 类指针优先按名解析；解析不到时使用 fallback，但仍校验 tdi + 类名，避免版本变化后误读。
+inline uintptr_t resolve_pjms_klass(ov::Data& d, const char* name, uint32_t tdi, uintptr_t fallback) {
+    uintptr_t cand[2] = { 0, fallback };
+    if (ovl::Ready()) cand[0] = ovr::FindKlass(name);
+    for (uintptr_t k : cand) {
+        if (!k) continue;
+        uint32_t got = 0;
+        if (!d.rd(k + 0x88, got) || got != tdi) continue;
+        char nm[128] = {};
+        if (!d.copy_name(k, nm, sizeof nm) || std::strcmp(nm, name) != 0) continue;
+        return k;
+    }
+    return 0;
+}
+
+struct PjmsScanCtx {
+    ov::Data* d = nullptr;
+    uintptr_t klass = 0;
+    std::vector<Ent>* out = nullptr;
+    bool gadget = false;
+    int cap = 256;
+};
+
+inline bool pjms_scan_cb(uintptr_t addr, uintptr_t value, void* vctx) {
+    PjmsScanCtx* c = (PjmsScanCtx*)vctx;
+    if (value != c->klass || !c->out) return true;
+    if ((int)c->out->size() >= c->cap) return false;
+    for (const Ent& e : *c->out) if (e.p == addr) return true;
+
+    float x = 0, y = 0, z = 0;
+    if (!c->d->rd(addr + 0x98, x) || !c->d->rd(addr + 0x9C, y) || !c->d->rd(addr + 0xA0, z))
+        return true;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return true;
+    if (std::fabs(x) > 100000.0f || std::fabs(y) > 100000.0f || std::fabs(z) > 100000.0f)
+        return true;
+
+    Ent e;
+    e.p = addr;
+    e.k = c->klass;
+    e.x = x;
+    e.y = y;
+    e.z = z;
+    e.name = c->d->name_of(c->klass);
+
+    if (c->gadget) {
+        uintptr_t cfg = 0;
+        if (!c->d->rd(addr + 0xD8, cfg) || !cfg) return true;
+        char graph[192] = {};
+        if (!c->d->read_il2str(cfg, 0x20, graph, sizeof graph) || !graph[0]) return true;
+        const bool chest = std::strstr(graph, "Chest") != nullptr;
+        const bool collect = std::strstr(graph, "Collect") != nullptr;
+        if (!chest && !collect) return true;
+        if (std::strstr(graph, "EliteChest")) e.label = "精英宝箱";
+        else if (std::strstr(graph, "RareChest")) e.label = "稀有宝箱";
+        else if (chest) e.label = "宝箱";
+        else e.label = "采集物";
+    } else {
+        e.label = "NPC";
+    }
+    c->out->push_back(e);
+    return true;
+}
+
+inline void scan_pjms(ov::Data& d, uintptr_t klass, bool gadget, std::vector<Ent>& out,
+                      uintptr_t near_va = 0) {
+    out.clear();
+    if (!klass) return;
+    PjmsScanCtx c;
+    c.d = &d;
+    c.klass = klass;
+    c.out = &out;
+    c.gadget = gadget;
+    if (!near_va) near_va = 0x700CE65C000ULL;
+    // 只扫 AvatarManager 附近的 256MB：PJMS actor 与管理器在同一片托管堆。
+    ovr::ScanQwords(klass, &pjms_scan_cb, &c, 1u << 18, near_va, 256ULL << 20);
+}
+
+struct PropAddrCtx {
+    uintptr_t klass = 0;
+    std::vector<uintptr_t>* out = nullptr;
+    int cap = 64;
+};
+
+inline bool prop_addr_cb(uintptr_t addr, uintptr_t value, void* vctx) {
+    PropAddrCtx* c = (PropAddrCtx*)vctx;
+    if (value != c->klass || !c->out) return true;
+    if ((int)c->out->size() >= c->cap) return false;
+    for (uintptr_t p : *c->out) if (p == addr) return true;
+    c->out->push_back(addr);
+    return true;
+}
+
+inline void scan_prop_addrs(uintptr_t klass, uintptr_t near_va, std::vector<uintptr_t>& out) {
+    out.clear();
+    if (!klass) return;
+    if (!near_va) near_va = 0x700CE65C000ULL;
+    PropAddrCtx c;
+    c.klass = klass;
+    c.out = &out;
+    ovr::ScanQwords(klass, &prop_addr_cb, &c, 1u << 18, near_va, 256ULL << 20);
+}
+
+struct PjmsCache {
+    std::mutex mtx;
+    std::vector<Ent> gadgets;
+    std::vector<Ent> npcs;
+    std::vector<uintptr_t> props;
+    uint64_t stamp = 0;
+};
+
+inline PjmsCache& pjms_cache() {
+    static PjmsCache c;
+    return c;
+}
+
+// 扫描放到后台线程：窗口线程只取缓存，避免每 3 秒卡一下。
+inline DWORD WINAPI pjms_worker(LPVOID) {
+    // 这里不调用 Data::init()：rd/copy_name/read_il2str 只依赖 ReadProcessMemory，
+    // 避免后台线程重复初始化 profile 与主线程竞争。
+    ov::Data d;
+    for (;;) {
+        const uintptr_t gk = resolve_pjms_klass(d, "PJMSGadgetActor", 74105u, 0x5000113E560ULL);
+        const uintptr_t nk = resolve_pjms_klass(d, "PJMSNPCActor", 74163u, 0x5000113FE58ULL);
+        const uintptr_t pk = resolve_pjms_klass(d, "MonoSimpleProp", 36619u, 0x500019DEC08ULL);
+        uintptr_t anchor = ovl::AvatarManager();
+        if (!anchor) anchor = ovl::MonsterManager();
+        if (!anchor) anchor = 0x700CE65C000ULL;
+        std::vector<Ent> gs, ns;
+        std::vector<uintptr_t> ps;
+        if (gk) scan_pjms(d, gk, true, gs, anchor);
+        if (nk) scan_pjms(d, nk, false, ns, anchor);
+        if (pk) scan_prop_addrs(pk, anchor, ps);
+        {
+            std::lock_guard<std::mutex> lock(pjms_cache().mtx);
+            pjms_cache().gadgets.swap(gs);
+            pjms_cache().npcs.swap(ns);
+            pjms_cache().props.swap(ps);
+            pjms_cache().stamp = GetTickCount64();
+        }
+        Sleep(5000);
+    }
+    return 0;
+}
+
+inline void start_pjms_worker() {
+    static std::atomic<bool> started(false);
+    if (started.exchange(true)) return;
+    CreateThread(nullptr, 0, &pjms_worker, nullptr, 0, nullptr);
+}
+
+// 玩家真实世界坐标：用 BaseMonoEntity.get_RootNodePosition，避免距离跟相机转动变化。
+inline void refresh_player_pos(ov::Data& d, State& s) {
+    if (!d.ua || s.avatars.empty()) {
+        s.player_ok = false;
+        return;
+    }
+    if (s.player_t && s.t - s.player_t < 100) return;
+    s.player_t = s.t;
+    s.player_ok = false;
+    struct Sig { unsigned char b[8]; } sig{};
+    if (!d.rd(d.ua + 0x79C36F0, sig)) return;
+    if (!(sig.b[0] == 0x56 && sig.b[1] == 0x48 && sig.b[2] == 0x83 && sig.b[3] == 0xEC &&
+          sig.b[4] == 0x30 && sig.b[5] == 0x48 && sig.b[6] == 0x89 && sig.b[7] == 0xCE)) return;
+    typedef void (*GetPosFn)(void*, void*, void*);
+    float p[3] = {};
+    ((GetPosFn)(d.ua + 0x79C36F0))((void*)p, (void*)s.avatars[0].p, nullptr);
+    if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) return;
+    if (std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) < 0.01f) return;
+    memcpy(s.player_pos, p, sizeof p);
+    s.player_ok = true;
+}
+
+// MonoSimpleProp（关卡道具）：坐标用 BaseMonoPropObject.get_XYZPosition；
+// 只加入晶体/采集物一类，避免把灯笼、锚点全部画出来。
+inline void refresh_props(ov::Data& d, State& s, const std::vector<uintptr_t>& addrs) {
+    s.props.clear();
+    if (!d.ua || !s.prop_k || addrs.empty()) return;
+    struct Sig { unsigned char b[8]; } sig{};
+    if (!d.rd(d.ua + 0x5B902D0, sig)) return;
+    if (!(sig.b[0] == 0x56 && sig.b[1] == 0x48 && sig.b[2] == 0x83 && sig.b[3] == 0xEC &&
+          sig.b[4] == 0x30 && sig.b[5] == 0x48 && sig.b[6] == 0x89 && sig.b[7] == 0xCE)) return;
+    typedef void (*GetPosFn)(void*, void*, void*);
+    for (uintptr_t obj : addrs) {
+        uintptr_t k = 0;
+        if (!d.rd(obj, k) || k != s.prop_k) continue;
+        char name[128] = {}, tag[128] = {};
+        d.read_il2str(obj, 0x288, name, sizeof name);
+        d.read_il2str(obj, 0x290, tag, sizeof tag);
+        auto has = [](const char* v, const char* k2) {
+            return v[0] && std::strstr(v, k2) != nullptr;
+        };
+        const bool crystal = has(name, "ScanEffect") || has(name, "Memory") || has(name, "Crystal") ||
+                             has(name, "Shard") || has(name, "Pian") || has(name, "Fragment") ||
+                             has(name, "Collect") || has(tag, "Collect");
+        // 只对已验证安全的晶体类调用 getter；VN/普通道具的 Transform 不一定是场景实例，
+        // 直接调用会崩，先跳过。
+        if (!crystal) continue;
+        uintptr_t tr = 0;
+        if (!d.rd(obj + 0x218, tr) || !tr) continue;
+        float p[3] = {};
+        ((GetPosFn)(d.ua + 0x5B902D0))((void*)p, (void*)obj, nullptr);
+        if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) continue;
+        if (std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) < 0.01f) continue;
+        Ent e;
+        e.p = obj;
+        e.k = k;
+        e.x = p[0];
+        e.y = p[1];
+        e.z = p[2];
+        e.name = name;
+        e.label = "采集物";
+        s.props.push_back(e);
+    }
+}
+
+inline std::atomic<bool>& teleport_req() {
+    static std::atomic<bool> v(false);
+    return v;
+}
+
+// 实验性传送：F11 传到距离参考点最近的目标。
+// 使用 BaseMonoAnimatorEntity.TeleportTo(Vector3)；调用前校验函数签名，版本不符则跳过。
+inline void try_teleport(ov::Data& d, State& s) {
+    if (!teleport_req().exchange(false)) return;
+    if (!d.ua || s.avatars.empty()) return;
+    const Ent* best = nullptr;
+    float bestd = 1e18f;
+    const float rx = s.player_ok ? s.player_pos[0] : s.cam_pos[0];
+    const float ry = s.player_ok ? s.player_pos[1] : s.cam_pos[1];
+    const float rz = s.player_ok ? s.player_pos[2] : s.cam_pos[2];
+    auto consider = [&](const std::vector<Ent>& list) {
+        for (const Ent& e : list) {
+            if (std::find(s.skipped.begin(), s.skipped.end(), e.p) != s.skipped.end()) continue;
+            const float dx = e.x - rx, dy = e.y - ry, dz = e.z - rz;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestd) { bestd = d2; best = &e; }
+        }
+    };
+    consider(s.props);
+    consider(s.gadgets);
+    consider(s.npcs);
+    if (!best) return;
+    // 传送过的目标加入忽略表；下次 F11 会去下一个最近的宝箱。
+    if (s.skipped.size() > 512) s.skipped.erase(s.skipped.begin());
+    s.skipped.push_back(best->p);
+
+    struct Sig { unsigned char b[8]; } sig{};
+    if (!d.rd(d.ua + 0x995EC20, sig)) return;
+    if (!(sig.b[0] == 0x56 && sig.b[1] == 0x57 && sig.b[2] == 0x53 && sig.b[3] == 0x48 &&
+          sig.b[4] == 0x83 && sig.b[5] == 0xEC && sig.b[6] == 0x50 && sig.b[7] == 0x48)) return;
+
+    typedef void (*TpFn)(void*, void*, void*);
+    float pos[3] = { best->x, best->y + 0.5f, best->z };
+    ((TpFn)(d.ua + 0x995EC20))((void*)s.avatars[0].p, (void*)pos, nullptr);
+}
+
 inline void refresh_ents(ov::Data& d, State& s) {
     const uint32_t ga = ovp::Rva(ovp::SymAvatarMgrGlobal);
     const uint32_t gm = ovp::Rva(ovp::SymMonsterMgrGlobal);
@@ -256,6 +538,47 @@ inline void refresh_ents(ov::Data& d, State& s) {
     } else {
         s.monsters.clear();
     }
+
+    // PJMS 宝箱/采集物/NPC：扫描在后台线程完成，窗口线程只取缓存。
+    start_pjms_worker();
+    if (!s.prop_k)
+        s.prop_k = resolve_pjms_klass(d, "MonoSimpleProp", 36619u, 0x500019DEC08ULL);
+    bool cache_updated = false;
+    std::vector<uintptr_t> prop_addrs;
+    {
+        std::lock_guard<std::mutex> lock(pjms_cache().mtx);
+        if (pjms_cache().stamp != s.pjms_t) {
+            // 每次扫描结果都必须覆盖，包括空结果；否则换场景/开箱后旧目标会一直残留。
+            s.gadgets = pjms_cache().gadgets;
+            s.npcs = pjms_cache().npcs;
+            prop_addrs = pjms_cache().props;
+            s.pjms_t = pjms_cache().stamp;
+            cache_updated = true;
+        }
+    }
+    if (cache_updated) refresh_props(d, s, prop_addrs);
+
+    // 后台线程首次结果为空时，同步补扫一次，避免一直 0 绘制。
+    if (!s.pjms_sync_done && s.gadgets.empty()) {
+        s.pjms_sync_done = true;
+        uintptr_t anchor = ovl::AvatarManager();
+        if (!anchor) anchor = ovl::MonsterManager();
+        uintptr_t gk = resolve_pjms_klass(d, "PJMSGadgetActor", 74105u, 0x5000113E560ULL);
+        if (gk) scan_pjms(d, gk, true, s.gadgets, anchor);
+        uintptr_t nk = resolve_pjms_klass(d, "PJMSNPCActor", 74163u, 0x5000113FE58ULL);
+        if (nk) scan_pjms(d, nk, false, s.npcs, anchor);
+    }
+    refresh_player_pos(d, s);
+    try_teleport(d, s);
+
+    auto drop_skipped = [&](std::vector<Ent>& v) {
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const Ent& e) {
+            return std::find(s.skipped.begin(), s.skipped.end(), e.p) != s.skipped.end();
+        }), v.end());
+    };
+    drop_skipped(s.gadgets);
+    drop_skipped(s.npcs);
+    drop_skipped(s.props);
 
     s.ready = s.avatar_mgr || s.monster_mgr;
     if (!s.ready) {
@@ -437,6 +760,8 @@ static void* g_dmg_stub = nullptr;
 static volatile float g_dmg_mult = 1.0f;
 static volatile uint32_t g_dmg_flags = 0;
 
+static constexpr uint32_t kOhkValueBits = 0x4EFFFFFFu;
+
 static constexpr uint32_t kDmgFlagMult = 1u;
 static constexpr uint32_t kDmgFlagGod = 2u;
 static constexpr uint32_t kDmgFlagOhk = 4u;
@@ -447,7 +772,7 @@ inline bool dmg_build_stub(uintptr_t resume) {
         0xC7, 0x86, 0x9C, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x48, 0x85, 0xFF
     };
     static const uint32_t kOffs[4] = { 0x90, 0x80, 0x9C, 0x64 };
-    static const uint32_t kOhkBits = 0x4E6E6B28u; // 1e9f
+    static const uint32_t kOhkBits = kOhkValueBits;
 
     uint8_t code[512] = { 0 };
     uint8_t* p = code;

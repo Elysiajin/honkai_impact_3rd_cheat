@@ -165,22 +165,28 @@ void PageEsp()
 
     ImGui::BeginGroup();
 
-    if (Card("绘制", ImVec2(272.0f, 270.0f)))
+    if (Card("绘制", ImVec2(272.0f, 350.0f)))
     {
         ToggleRow("ESP 总开关", &Cfg().esp_on);
         ToggleRow("绘制方框", &Cfg().esp_box);
         ToggleRow("显示名称", &Cfg().esp_name);
         ToggleRow("显示距离", &Cfg().esp_dist);
         ToggleRow("队友框", &Cfg().esp_team);
+        ToggleRow("宝箱/采集物", &Cfg().gadget_on);
+        ToggleRow("绘制NPC", &Cfg().npc_on);
+        ToggleRow("顶部射线", &Cfg().ray_on);
+        ToggleRow("F11 传送最近目标", &Cfg().tp_on);
     }
     CardEnd();
 
     CardGap();
 
-    if (Card("本帧", ImVec2(272.0f, 210.0f)))
+    if (Card("本帧状态", ImVec2(272.0f, 240.0f)))
     {
         snprintf(buf, sizeof buf, "%d", St().esp_drawn);
         KeyValue("已绘制", buf);
+        snprintf(buf, sizeof buf, "%d / %d", St().gadget_n, St().npc_n);
+        KeyValue("宝箱 / NPC 缓存", buf);
         float ratio = St().monster_n > 0
             ? (float)St().esp_drawn / (float)St().monster_n : 0.0f;
         if (ratio > 1.0f) ratio = 1.0f;
@@ -192,22 +198,31 @@ void PageEsp()
     ImGui::SameLine(0.0f, 10.0f * S());
     ImGui::BeginGroup();
 
-    if (Card("几何", ImVec2(272.0f, 270.0f)))
+    if (Card("几何", ImVec2(272.0f, 310.0f)))
     {
         ImGui::SliderFloat("名称字号", &Cfg().esp_font, 12.0f, 48.0f, "%.0f px");
         ImGui::SliderFloat("名称偏移", &Cfg().esp_off, 0.0f, 60.0f, "%.0f px");
         ImGui::SliderFloat("人物高度", &Cfg().esp_h, 1.0f, 3.2f, "%.2f m");
         ImGui::SliderFloat("最远距离", &Cfg().max_dist, 20.0f, 2000.0f, "%.0f m");
+        ImGui::SliderFloat("射线线宽", &Cfg().ray_w, 0.5f, 12.0f, "%.1f px");
         ToggleRow("平滑跟随", &Cfg().esp_smooth);
     }
     CardEnd();
 
     CardGap();
 
-    if (Card("颜色", ImVec2(272.0f, 210.0f)))
+    if (Card("颜色", ImVec2(272.0f, 280.0f)))
     {
         ImGui::ColorEdit4("方框",
                           Cfg().esp_col,
+                          ImGuiColorEditFlags_AlphaPreview | ImGuiColorEditFlags_NoSidePreview |
+                          ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs);
+        ImGui::ColorEdit4("宝箱",
+                          Cfg().gadget_col,
+                          ImGuiColorEditFlags_AlphaPreview | ImGuiColorEditFlags_NoSidePreview |
+                          ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs);
+        ImGui::ColorEdit4("NPC",
+                          Cfg().npc_col,
                           ImGuiColorEditFlags_AlphaPreview | ImGuiColorEditFlags_NoSidePreview |
                           ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs);
     }
@@ -258,7 +273,6 @@ void PageBattle()
         ToggleRow("启用倍攻", &Cfg().atk_on);
         ImGui::SliderFloat("攻击速度倍率", &Cfg().atk_mult, 1.0f, 10.0f, "%.1f x");
         Mark(Cfg().atk_on && St().atk_speed_applied);
-        Hint("Animator speed override, off restores original");
     }
     CardEnd();
 
@@ -270,7 +284,7 @@ void PageBattle()
     {
         ToggleRow("无冷却", &Cfg().no_cd);
         Mark(Cfg().no_cd && St().no_cd_applied);
-        Hint("大招与武器技能不再进入冷却");
+        Hint("大招与武器技能不再进入冷却(不过并不稳定)");
     }
     CardEnd();
 
@@ -306,11 +320,11 @@ void PageBattle()
 
     CardGap();
 
-    if (Card("一击必杀", ImVec2(272.0f, 140.0f)))
+    if (Card("超高伤害", ImVec2(272.0f, 140.0f)))
     {
-        ToggleRow("启用一击必杀", &Cfg().ohk);
+        ToggleRow("启用超高伤害", &Cfg().ohk);
         Mark(Cfg().ohk && St().ohk_applied);
-        Hint("命中怪物时直接造成 10 亿伤害，优先于伤害倍率");
+        Hint("命中怪物时直接造成 int 最大值伤害，优先于伤害倍率");
     }
     CardEnd();
 

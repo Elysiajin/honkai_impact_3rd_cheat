@@ -255,6 +255,8 @@ inline bool Build()
     uniq[n_uniq++] = "TiledGameScriptor";
     uniq[n_uniq++] = "VisualNovelScriptor";
     uniq[n_uniq++] = "LuaScriptMgr";
+    uniq[n_uniq++] = "PJMSGadgetActor";
+    uniq[n_uniq++] = "PJMSNPCActor";
 
     const int nfound = ovr::BuildIndexFor(uniq, n_uniq);
     int resolved = 0, mismatch = 0, by_sig = 0;
