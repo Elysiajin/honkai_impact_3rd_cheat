@@ -225,7 +225,7 @@ inline bool Build()
 
     const char* cls_names[ovp::SymCount];
     for (int i = 0; i < ovp::SymCount; ++i)
-        cls_names[i] = ovp::kGenNames[i].klass;
+        cls_names[i] = ovp::kGenNames[i].klass;   // 可能含 nullptr（kGenNames 未满项），去重循环已判空
     cls_names[ovp::SymIsSpEnough] = nullptr;
     cls_names[ovp::SymGetSkillCd] = nullptr;
     cls_names[ovp::SymIsSkillHasCd] = nullptr;
@@ -237,7 +237,7 @@ inline bool Build()
     for (int i = 0; i < ovp::SymCount; ++i)
     {
         const char* c = cls_names[i];
-        if (!c || !c[0]) continue;
+        if (!c || !c[0]) continue;   // 空指针/空串跳过
         bool dup = false;
         for (int j = 0; j < n_uniq; ++j)
             if (std::strcmp(uniq[j], c) == 0) { dup = true; break; }
@@ -267,7 +267,7 @@ inline bool Build()
     for (int i = 0; i < ovp::SymCount; ++i)
     {
         const ovp::GenName& g = ovp::kGenNames[i];
-        if (!g.klass[0] || !g.token) continue;
+        if (!g.klass || !g.klass[0] || !g.token) continue;   // klass 可能为空（数组未补满），防空引用
         ovr::Hit hit;
         if (!ovr::ByName(g.klass, g.token, &hit)) continue;
         const uintptr_t fn = hit.fn + (uintptr_t)g.delta;

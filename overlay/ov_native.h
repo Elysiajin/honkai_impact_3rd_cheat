@@ -35,7 +35,6 @@ struct State {
     float player_pos[3] = { 0, 0, 0 };
     bool player_ok = false;
     uint64_t player_t = 0;
-    std::vector<uintptr_t> skipped;
     bool cam_ok = false;
     bool vp_valid = false;
     uintptr_t camera = 0;
@@ -464,45 +463,54 @@ inline void refresh_props(ov::Data& d, State& s, const std::vector<uintptr_t>& a
     }
 }
 
-inline std::atomic<bool>& teleport_req() {
+inline std::atomic<bool>& tp_req() {
     static std::atomic<bool> v(false);
     return v;
 }
 
-// 实验性传送：F11 传到距离参考点最近的目标。
-// 使用 BaseMonoAnimatorEntity.TeleportTo(Vector3)；调用前校验函数签名，版本不符则跳过。
-inline void try_teleport(ov::Data& d, State& s) {
-    if (!teleport_req().exchange(false)) return;
-    if (!d.ua || s.avatars.empty()) return;
-    const Ent* best = nullptr;
-    float bestd = 1e18f;
-    const float rx = s.player_ok ? s.player_pos[0] : s.cam_pos[0];
-    const float ry = s.player_ok ? s.player_pos[1] : s.cam_pos[1];
-    const float rz = s.player_ok ? s.player_pos[2] : s.cam_pos[2];
-    auto consider = [&](const std::vector<Ent>& list) {
-        for (const Ent& e : list) {
-            if (std::find(s.skipped.begin(), s.skipped.end(), e.p) != s.skipped.end()) continue;
-            const float dx = e.x - rx, dy = e.y - ry, dz = e.z - rz;
-            const float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < bestd) { bestd = d2; best = &e; }
-        }
-    };
-    consider(s.props);
-    consider(s.gadgets);
-    consider(s.npcs);
-    if (!best) return;
-    // 传送过的目标加入忽略表；下次 F11 会去下一个最近的宝箱。
-    if (s.skipped.size() > 512) s.skipped.erase(s.skipped.begin());
-    s.skipped.push_back(best->p);
+inline float* tp_pos() {
+    static float v[3] = { 0, 0, 0 };
+    return v;
+}
 
+inline char* tp_msg() {
+    static char v[96] = "";
+    return v;
+}
+
+inline void request_teleport(float x, float y, float z) {
+    float* p = tp_pos();
+    p[0] = x;
+    p[1] = y;
+    p[2] = z;
+    tp_req().store(true);
+}
+
+inline void do_teleport(ov::Data& d, State& s) {
+    if (!tp_req().exchange(false)) return;
+    if (!d.ua) {
+        lstrcpynA(tp_msg(), "未初始化", 96);
+        return;
+    }
+    if (s.avatars.empty()) {
+        lstrcpynA(tp_msg(), "没有角色实例", 96);
+        return;
+    }
     struct Sig { unsigned char b[8]; } sig{};
-    if (!d.rd(d.ua + 0x995EC20, sig)) return;
+    if (!d.rd(d.ua + 0x995EC20, sig)) {
+        lstrcpynA(tp_msg(), "读函数前导失败", 96);
+        return;
+    }
     if (!(sig.b[0] == 0x56 && sig.b[1] == 0x57 && sig.b[2] == 0x53 && sig.b[3] == 0x48 &&
-          sig.b[4] == 0x83 && sig.b[5] == 0xEC && sig.b[6] == 0x50 && sig.b[7] == 0x48)) return;
-
+          sig.b[4] == 0x83 && sig.b[5] == 0xEC && sig.b[6] == 0x50 && sig.b[7] == 0x48)) {
+        lstrcpynA(tp_msg(), "函数签名不匹配（版本不符）", 96);
+        return;
+    }
     typedef void (*TpFn)(void*, void*, void*);
-    float pos[3] = { best->x, best->y + 0.5f, best->z };
+    const float* t = tp_pos();
+    float pos[3] = { t[0], t[1] + 0.5f, t[2] };
     ((TpFn)(d.ua + 0x995EC20))((void*)s.avatars[0].p, (void*)pos, nullptr);
+    lstrcpynA(tp_msg(), "已传送到目标", 96);
 }
 
 inline void refresh_ents(ov::Data& d, State& s) {
@@ -569,16 +577,7 @@ inline void refresh_ents(ov::Data& d, State& s) {
         if (nk) scan_pjms(d, nk, false, s.npcs, anchor);
     }
     refresh_player_pos(d, s);
-    try_teleport(d, s);
-
-    auto drop_skipped = [&](std::vector<Ent>& v) {
-        v.erase(std::remove_if(v.begin(), v.end(), [&](const Ent& e) {
-            return std::find(s.skipped.begin(), s.skipped.end(), e.p) != s.skipped.end();
-        }), v.end());
-    };
-    drop_skipped(s.gadgets);
-    drop_skipped(s.npcs);
-    drop_skipped(s.props);
+    do_teleport(d, s);
 
     s.ready = s.avatar_mgr || s.monster_mgr;
     if (!s.ready) {
@@ -608,12 +607,18 @@ static uint8_t g_ultra_bak[ovp::kUltraCount][3] = {};
 static bool g_ultra_on[ovp::kUltraCount] = {};
 static uint8_t g_sp_bak[3] = { 0 };
 static bool g_sp_on = false;
+static uint8_t g_sp_cost_bak[4] = { 0 };
+static bool g_sp_cost_on = false;
 static uint8_t g_cd_ui_bak[3] = { 0 };
 static bool g_cd_ui_on = false;
 static uint8_t g_cd_uican_bak[3] = { 0 };
 static bool g_cd_uican_on = false;
 static uint8_t g_cd_actor_bak[3] = { 0 };
 static bool g_cd_actor_on = false;
+static uint8_t g_actor_cd_bak[3] = { 0 };
+static bool g_actor_cd_on = false;
+static uint8_t g_cd_val_bak[4] = { 0 };
+static bool g_cd_val_on = false;
 static uint8_t g_crit_main_bak[2] = { 0 };
 static bool g_crit_main_on = false;
 static uint8_t g_crit_phys_bak[2] = { 0 };
@@ -658,6 +663,19 @@ inline bool patch_ret_false(uintptr_t at, uint8_t* bak, bool& flag, bool on) {
     return true;
 }
 
+// 浮点返回 0：xorps xmm0,xmm0; ret
+inline bool patch_ret_zero_float(uintptr_t at, uint8_t* bak, bool& flag, bool on) {
+    if (on == flag) return true;
+    if (on) {
+        const uint8_t bytes[4] = { 0x0F, 0x57, 0xC0, 0xC3 };
+        if (!write_code(at, bytes, 4, bak)) return false;
+    } else {
+        if (!write_code(at, bak, 4, nullptr)) return false;
+    }
+    flag = on;
+    return true;
+}
+
 inline bool god_mode(ov::Data& d, bool on) {
     const uint32_t rv = ovp::Rva(ovp::SymBeHit);
     if (!rv) return false;
@@ -677,11 +695,13 @@ inline bool god_mode(ov::Data& d, bool on) {
 }
 
 inline bool infinite_sp(ov::Data& d, bool on) {
-    if (on == g_sp_on) return true;
+    if (on == g_sp_on && on == g_sp_cost_on) return true;
     const uint32_t rv_sp = ovp::Rva(ovp::SymIsSpEnough);
-    if (!rv_sp) return false;
+    const uint32_t rv_cost = ovp::Rva(ovp::SymGetSkillSpCost);
+    if (!rv_sp || !rv_cost) return false;
     bool ok = true;
     if (!patch_ret_true(d.ua + rv_sp, g_sp_bak, g_sp_on, on)) ok = false;
+    if (!patch_ret_zero_float(d.ua + rv_cost, g_sp_cost_bak, g_sp_cost_on, on)) ok = false;
     for (int i = 0; i < ovp::kUltraCount; ++i) {
         const uint32_t rv = ovp::UltraRva(i);
         if (!rv) { ok = false; continue; }
@@ -692,6 +712,7 @@ inline bool infinite_sp(ov::Data& d, bool on) {
             const uint32_t rv = ovp::UltraRva(i);
             if (rv && g_ultra_on[i] == on) patch_ret_true(d.ua + rv, g_ultra_bak[i], g_ultra_on[i], !on);
         }
+        if (g_sp_cost_on == on) patch_ret_zero_float(d.ua + rv_cost, g_sp_cost_bak, g_sp_cost_on, !on);
         if (g_sp_on == on) patch_ret_true(d.ua + rv_sp, g_sp_bak, g_sp_on, !on);
         return false;
     }
@@ -702,15 +723,23 @@ inline bool no_skill_cd(ov::Data& d, bool on) {
     const uint32_t rv_ui = ovp::Rva(ovp::SymUiSkillInCd);
     const uint32_t rv_can = ovp::Rva(ovp::SymUiCanUseSkill);
     const uint32_t rv_actor = ovp::Rva(ovp::SymAvatarCanUseSkill);
-    if (!rv_ui || !rv_can || !rv_actor) return false;
+    const uint32_t rv_actor_cd = ovp::Rva(ovp::SymAvatarSkillInCd);
+    const uint32_t rv_cd_val = ovp::Rva(ovp::SymGetSkillCd);
+    if (!rv_ui || !rv_can || !rv_actor || !rv_actor_cd || !rv_cd_val) return false;
+    if (on == g_cd_ui_on && on == g_cd_uican_on && on == g_cd_actor_on &&
+        on == g_actor_cd_on && on == g_cd_val_on) return true;
     bool ok = true;
     if (!patch_ret_false(d.ua + rv_ui, g_cd_ui_bak, g_cd_ui_on, on)) ok = false;
     if (!patch_ret_true(d.ua + rv_can, g_cd_uican_bak, g_cd_uican_on, on)) ok = false;
     if (!patch_ret_true(d.ua + rv_actor, g_cd_actor_bak, g_cd_actor_on, on)) ok = false;
+    if (!patch_ret_false(d.ua + rv_actor_cd, g_actor_cd_bak, g_actor_cd_on, on)) ok = false;
+    if (!patch_ret_zero_float(d.ua + rv_cd_val, g_cd_val_bak, g_cd_val_on, on)) ok = false;
     if (!ok) {
         if (g_cd_ui_on == on) patch_ret_false(d.ua + rv_ui, g_cd_ui_bak, g_cd_ui_on, !on);
         if (g_cd_uican_on == on) patch_ret_true(d.ua + rv_can, g_cd_uican_bak, g_cd_uican_on, !on);
         if (g_cd_actor_on == on) patch_ret_true(d.ua + rv_actor, g_cd_actor_bak, g_cd_actor_on, !on);
+        if (g_actor_cd_on == on) patch_ret_false(d.ua + rv_actor_cd, g_actor_cd_bak, g_actor_cd_on, !on);
+        if (g_cd_val_on == on) patch_ret_zero_float(d.ua + rv_cd_val, g_cd_val_bak, g_cd_val_on, !on);
         return false;
     }
     return true;
@@ -931,8 +960,8 @@ inline bool attack_speed(ov::Data& d, const State& s, bool on, float mult) {
     return n > 0;
 }
 
-inline bool sp_applied() { return g_sp_on; }
-inline bool cd_applied() { return g_cd_ui_on && g_cd_uican_on && g_cd_actor_on; }
+inline bool sp_applied() { return g_sp_on && g_sp_cost_on; }
+inline bool cd_applied() { return g_cd_ui_on && g_cd_uican_on && g_cd_actor_on && g_actor_cd_on && g_cd_val_on; }
 inline bool crit_applied() { return g_crit_main_on && g_crit_phys_on && g_crit_elem_on; }
 inline bool dmg_applied() { return g_dmg_on; }
 inline bool ohk_applied() { return g_dmg_on && (g_dmg_flags & kDmgFlagOhk) != 0; }

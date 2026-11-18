@@ -22,9 +22,13 @@
 
 #include "ov_data.h"
 #include "ov_native.h"
+#include "ov_nav.h"
+#include "NavBridge.h"
 #include "ov_act.h"
 #include "ov_lua.h"
 #include "ov_mcp.h"
+
+#include <cmath>
 
 #include "ui/App.h"
 #include "ui/State.h"
@@ -241,6 +245,8 @@ static void tick_game_thread() {
     }
     if (g_data_ready) {
         ovn::refresh(g_data, g_game_nv);
+        // 寻路：消费 nav_req()，在主线程调 NavMesh（Triangulation+A*）
+        ovnav::nav_tick(g_data, g_game_nv);
         if (cfg.god != g_god_state.load()) {
             if (ovn::god_mode(g_data, cfg.god)) g_god_state = cfg.god;
         }
@@ -591,6 +597,130 @@ static void draw_box(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col) {
     dl->AddRect(a, b, col, 0, 0, 1.5f);
 }
 
+// 寻路路径绘制：读 ovnav::nav_state()，世界拐点 w2s 后画折线 + 终点标记。
+// 读的是游戏线程写入的 NavState（v1 接受可能的一帧竞争，最多画错一帧不崩）。
+static void draw_nav() {
+    const ovn::State& s = g_nv;
+    if (!s.cam_ok || !s.vp_valid) return;
+    const ovnav::NavState& ns = ovnav::nav_state();
+    if (ns.pts.size() < 2) return;
+
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float sw = (ds.x > 1.0f) ? ds.x : s.w;
+    const float sh = (ds.y > 1.0f) ? ds.y : s.h;
+    if (sw <= 1.0f || sh <= 1.0f) return;
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const ImU32 col_path = IM_COL32(120, 200, 255, 230);
+    const ImU32 col_path_bg = IM_COL32(0, 40, 80, 170);
+    const ImU32 col_node = IM_COL32(255, 220, 90, 235);
+    const ImU32 col_end = IM_COL32(255, 90, 90, 235);
+
+    bool any = false;
+    ImVec2 prev{};
+    char label[64];
+    for (size_t i = 0; i < ns.pts.size(); ++i) {
+        const ovnav::Vec3& p = ns.pts[i];
+        float sx = 0, sy = 0;
+        if (!ovn::w2s(s.vp, p.x, p.y, p.z, s.w, s.h, sx, sy)) continue;
+        if (s.w > 1.0f && s.h > 1.0f && (s.w != sw || s.h != sh)) {
+            sx *= sw / s.w;
+            sy *= sh / s.h;
+        }
+        const ImVec2 cur(sx, sy);
+        if (any) {
+            dl->AddLine(prev, cur, col_path_bg, 4.0f);
+            dl->AddLine(prev, cur, col_path, 1.8f);
+        }
+        dl->AddCircleFilled(cur, 3.0f, col_node);
+        if (i + 1 == ns.pts.size()) {
+            dl->AddCircle(cur, 8.0f, col_end, 0, 2.5f);
+            snprintf(label, sizeof label, "终点 %.0fm",
+                     sqrtf((p.x - (s.player_ok ? s.player_pos[0] : s.cam_pos[0])) *
+                           (p.x - (s.player_ok ? s.player_pos[0] : s.cam_pos[0])) +
+                           (p.z - (s.player_ok ? s.player_pos[2] : s.cam_pos[2])) *
+                           (p.z - (s.player_ok ? s.player_pos[2] : s.cam_pos[2]))));
+            dl->AddText(ImVec2(cur.x + 10, cur.y - 8), col_end, label);
+        }
+        prev = cur;
+        any = true;
+    }
+    if (any && ns.msg[0]) {
+        // 状态行：路径信息（拐点数/网格规模/耗时）
+        dl->AddText(ImVec2(18.0f, sh * 0.5f), IM_COL32(120, 200, 255, 200), ns.msg);
+    }
+}
+
+// ============================ 寻路 UI 桥（渲染线程调用） ============================
+// PageEsp "寻路"卡片经 NavBridge.h 取实体列表/触发请求；实现放这里因为
+// g_nv（渲染线程持有的完整实体状态）是本文件 static。
+namespace ovnavui {
+
+bool fetch(int cat, Item* out, int cap, int& n) {
+    n = 0;
+    const ovn::State& s = g_nv;
+    // cat: 0=宝箱/采集(gadgets) 1=晶体采集物(props) 2=NPC 3=怪物
+    const std::vector<ovn::Ent>* list = nullptr;
+    if (cat == 0) list = &s.gadgets;
+    else if (cat == 1) list = &s.props;
+    else if (cat == 2) list = &s.npcs;
+    else if (cat == 3) list = &s.monsters;
+    if (!list) return false;
+    for (const ovn::Ent& e : *list) {
+        if (n >= cap) break;
+        Item& it = out[n++];
+        snprintf(it.name, sizeof it.name, "%s", e.name.c_str());
+        snprintf(it.label, sizeof it.label, "%s", e.label.c_str());
+        it.x = e.x; it.y = e.y; it.z = e.z;
+        it.p = e.p;
+        const float dx = e.x - s.player_pos[0];
+        const float dy = e.y - s.player_pos[1];
+        const float dz = e.z - s.player_pos[2];
+        it.dist = s.player_ok ? sqrtf(dx * dx + dy * dy + dz * dz) : 0.0f;
+    }
+    return true;
+}
+
+void request_to(float x, float y, float z) {
+    ovnav::nav_request_to({ x, y, z });
+}
+
+void request_teleport(float x, float y, float z) {
+    ovn::request_teleport(x, y, z);
+}
+
+const char* tp_text() {
+    return ovn::tp_msg();
+}
+
+const char* last_msg() {
+    return ovnav::nav_state().msg;
+}
+
+bool last_ok() {
+    return ovnav::nav_state().ok;
+}
+
+void diag() {
+    ovnav::nav_diag_req().store(true);
+}
+
+const char* diag_text() {
+    return ovnav::nav_state().diag;
+}
+
+void debug_info(char* out, int cap) {
+    const ovnav::NavState& ns = ovnav::nav_state();
+    snprintf(out, (size_t)cap,
+             "请求 %u / 主线程消费 %u / 阶段 %d / 符号 %08X%s / 玩家 %s / 网格 %s(%d,%d) / %ums",
+             ns.req_n, ns.tick_n, (int)ns.stage, ns.rva_tri,
+             ns.sym_ok ? "✓" : "✗",
+             ns.player_ok ? "✓" : "✗",
+             ns.tri_ok ? "✓" : "✗", ns.tri_v, ns.tri_i / 3, ns.last_ms);
+}
+
+} // namespace ovnavui
+
 static bool project_ent(const ovn::State& s, float sw, float sh, float x, float y, float z, float h,
                         float& bx, float& by, float& bw, float& bh) {
     float sx = 0, sy = 0, hx = 0, hy = 0;
@@ -811,33 +941,20 @@ static void render_overlay(IDXGISwapChain* sc) {
     }
     if (!g_gui_ready) init_gui(sc);
     if (g_gui_ready) {
-        static bool pk[9] = { false };
-        const int keys[9] = { VK_INSERT, VK_F3, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11 };
-        for (int i = 0; i < 9; ++i) {
-            bool down = (GetAsyncKeyState(keys[i]) & 0x8000) != 0;
-            bool pressed = down && !pk[i];
-            pk[i] = down;
-            if (!pressed) continue;
-            ui::Settings& cfg = ui::Cfg();
-            if (keys[i] == VK_INSERT) {
-                ui::AppSetVisible(!ui::AppVisible());
-            } else if (keys[i] == VK_F3) {
-                cfg.esp_on = !cfg.esp_on;
-            } else if (keys[i] == VK_F5) {
-                ui::Req().kill_all = true;
-            } else if (keys[i] == VK_F6) {
-                cfg.god = !cfg.god;
-            } else if (keys[i] == VK_F7) {
-                cfg.inf_sp = !cfg.inf_sp;
-            } else if (keys[i] == VK_F8) {
-                cfg.no_cd = !cfg.no_cd;
-            } else if (keys[i] == VK_F9) {
-                cfg.crit = !cfg.crit;
-            } else if (keys[i] == VK_F10) {
-                cfg.atk_on = !cfg.atk_on;
-            } else if (keys[i] == VK_F11) {
-                if (cfg.tp_on) ovn::teleport_req().store(true);
-            }
+        // 热键：INSERT 开关 UI，F5 秒杀。
+        static bool pk_ins = false;
+        {
+            bool down = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+            bool pressed = down && !pk_ins;
+            pk_ins = down;
+            if (pressed) ui::AppSetVisible(!ui::AppVisible());
+        }
+        static bool pk = false;
+        {
+            bool down = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
+            bool pressed = down && !pk;
+            pk = down;
+            if (pressed) ui::Req().kill_all = true;
         }
 
         tick_render_thread();
@@ -883,6 +1000,7 @@ static void render_overlay(IDXGISwapChain* sc) {
             update_fps();
 
             draw_esp(dt);
+            draw_nav();
             if (vis) ui::AppFrame(dt);
             g_ui_visible = ui::AppVisible();
 

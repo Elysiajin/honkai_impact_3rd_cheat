@@ -49,15 +49,24 @@ METHODS = [
     ("dmg_final", "MHEMGJMNDJI", "ResolveAttackDataFinal", 0x53E, 13),
     ("anim_speed_apply", "BaseMonoAnimatorEntity", "ApplyOverrideAnimatorSpeed", 0, 16),
     ("anim_speed_cancel", "BaseMonoAnimatorEntity", "CancelOverrideAnimatorSpeed", 0, 16),
+    ("navmesh_calculate_triangulation", "NavMesh", "CalculateTriangulation", 0, 16),
 ] + [("ultra%d" % i, cls, "AllowUseUltra", 0, 16) for i, cls in enumerate(ULTRA_CLASSES)]
 
 # 尚未找到稳定身份: 沿用上一版地址，更新后需人工确认
+# navmesh_sample_position: NavMesh.SamplePosition 有两个重载 (0x1256D250 / 0x1256D530)，
+# (class,method) 查表不唯一，走 RAW 硬编码 —— 0x1256D250 是 (src, hit, maxDist, areaMask) 四参版
+# navmesh_calculate_path: CalculatePath 同样两个重载 (0x1256D180 / 0x1256D5F0)，
+# 走 RAW 硬编码 —— 0x1256D180 是 (src, dst, areaMask, path) 四参 areaMask 版
 RAW = [
+    ("navmesh_sample_position", 0x1256D250, 16),
+    ("navmesh_calculate_path", 0x1256D180, 16),
     ("is_sp_enough", 0x8011F70, 8),
     ("get_skill_cd", 0x8009530, 8),
     ("is_skill_has_cd", 0x80152A0, 8),
     ("avatar_mgr_global", 0x2641588, 0),
     ("monster_mgr_global", 0x2642EA8, 0),
+    ("avatar_skill_in_cd", 0x8013070, 8),
+    ("get_skill_sp_cost", 0x8008F20, 8),
 ]
 
 

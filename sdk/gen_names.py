@@ -22,6 +22,10 @@ SYMBOLS = {
     "dmg_final": ("MHEMGJMNDJI", "ResolveAttackDataFinal"),
     "anim_speed_apply": ("BaseMonoAnimatorEntity", "ApplyOverrideAnimatorSpeed"),
     "anim_speed_cancel": ("BaseMonoAnimatorEntity", "CancelOverrideAnimatorSpeed"),
+    # 寻路：RAW 符号也要给出 klass/token（live fallback 用）；
+    # CalculatePath/SamplePosition 各 2 重载 → token 不唯一，先留空（无 live fallback，
+    # 仅静态 RVA 生效），triangulation 唯一可给。
+    "navmesh_calculate_triangulation": ("NavMesh", "CalculateTriangulation"),
 }
 
 ULTRA = [

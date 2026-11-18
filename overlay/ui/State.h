@@ -43,7 +43,6 @@ struct Settings
     bool  npc_on    = true;
     bool  ray_on    = true;
     float ray_w     = 2.0f;
-    bool  tp_on     = true;
     float gadget_col[4] = { 1.00f, 0.80f, 0.20f, 1.00f };
     float npc_col[4]    = { 0.20f, 1.00f, 1.00f, 1.00f };
 

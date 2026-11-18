@@ -26,6 +26,7 @@ static const uint32_t kTokens[] =
     0x06003B8Au,   // dmg_final  rva=0x0794065E  token=0x06003B8A
     0x0600B03Cu,   // anim_speed_apply  rva=0x099646E0  token=0x0600B03C
     0x0600B03Du,   // anim_speed_cancel  rva=0x09964930  token=0x0600B03D
+    0x00000000u,   // navmesh_calculate_triangulation  rva=0x1256D2A0  token=无
     0x0600AB8Cu,   // ultra0  rva=0x09BAE670  token=0x0600AB8C
     0x0600ABA5u,   // ultra1  rva=0x09DD97D0  token=0x0600ABA5
     0x0600ABB4u,   // ultra2  rva=0x0863B560  token=0x0600ABB4
@@ -38,13 +39,17 @@ static const uint32_t kTokens[] =
     0x0600ABD5u,   // ultra9  rva=0x06B86AF0  token=0x0600ABD5
     0x0600ABD8u,   // ultra10  rva=0x0863CA20  token=0x0600ABD8
     0x0600ABDBu,   // ultra11  rva=0x080BE120  token=0x0600ABDB
+    0x00000000u,   // navmesh_sample_position  rva=0x1256D250  token=无
+    0x00000000u,   // navmesh_calculate_path  rva=0x1256D180  token=无
     0x00000000u,   // is_sp_enough  rva=0x08011F70  token=无
     0x00000000u,   // get_skill_cd  rva=0x08009530  token=无
     0x00000000u,   // is_skill_has_cd  rva=0x080152A0  token=无
     0x00000000u,   // avatar_mgr_global  rva=0x02641588  token=无
     0x00000000u,   // monster_mgr_global  rva=0x02642EA8  token=无
+    0x00000000u,   // avatar_skill_in_cd  rva=0x08013070  token=无
+    0x00000000u,   // get_skill_sp_cost  rva=0x08008F20  token=无
 };
 
-constexpr int kTokenCount = 33;
+constexpr int kTokenCount = 38;
 
 } // namespace ovp

@@ -6,8 +6,10 @@
 #include "imgui_internal.h"
 
 #include "../ov_mcp.h"
+#include "../NavBridge.h"
 
 #include <cstdio>
+#include <cstring>
 
 namespace ui
 {
@@ -175,7 +177,6 @@ void PageEsp()
         ToggleRow("宝箱/采集物", &Cfg().gadget_on);
         ToggleRow("绘制NPC", &Cfg().npc_on);
         ToggleRow("顶部射线", &Cfg().ray_on);
-        ToggleRow("F11 传送最近目标", &Cfg().tp_on);
     }
     CardEnd();
 
@@ -228,6 +229,106 @@ void PageEsp()
     }
     CardEnd();
 
+    // 结束右列，寻路卡独占整行（宽 546，适配 566 内容区，避免被右边缘截断）
+    ImGui::EndGroup();
+    ImGui::BeginGroup();
+
+    // ============================ 寻路 ============================
+    // 列出 ESP 扫描到的实体（渲染线程 g_nv 直接读），每行"寻路"按钮
+    // → ovnavui::request_to(x,y,z) → 游戏主线程 nav_tick 计算 NavMesh 路径。
+    static int  nav_cat   = 0;                       // 0=宝箱/采集 1=采集物 2=NPC 3=怪物
+    static char nav_filter[64] = "";                 // 名称过滤
+    if (Card("寻路", ImVec2(546.0f, 560.0f)))
+    {
+        const char* cats[] = { "宝箱/采集", "晶体采集物", "NPC", "怪物" };
+        for (int c = 0; c < 4; ++c) {
+            if (c) ImGui::SameLine(0.0f, 4.0f * S());
+            bool on = (nav_cat == c);
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, Mix(Hex(0x3AA0FF), Hex(0x20242C), 0.35f));
+            if (ImGui::Button(cats[c], ImVec2((546.0f - 3 * 4.0f * S()) / 4.0f, 24.0f * S())))
+                nav_cat = c;
+            if (on) ImGui::PopStyleColor();
+        }
+
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##navfilter", "名称过滤（空=全部）", nav_filter, sizeof nav_filter);
+
+        // ---- 状态区（放在列表上方，保证一定看得见）----
+        {
+            const char* msg = ovnavui::last_msg();
+            const bool ok = ovnavui::last_ok();
+            ImGui::PushStyleColor(ImGuiCol_Text, ok ? Hex(0x7FD37F) : Hex(0xFF9090));
+            ImGui::TextWrapped("结果：%s", msg && msg[0] ? msg : "尚未寻路");
+            ImGui::PopStyleColor();
+
+            const char* tpm = ovnavui::tp_text();
+            if (tpm && tpm[0]) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Hex(0x9FD0FF));
+                ImGui::Text("传送：%s", tpm);
+                ImGui::PopStyleColor();
+            }
+
+            char dbg[256];
+            ovnavui::debug_info(dbg, (int)sizeof dbg);
+            ImGui::PushStyleColor(ImGuiCol_Text, Hex(0x8FA0B0));
+            ImGui::TextWrapped("链路：%s", dbg);
+            ImGui::PopStyleColor();
+
+            const char* dg = ovnavui::diag_text();
+            if (dg && dg[0]) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Hex(0xE0C070));
+                ImGui::TextWrapped("自检：%s", dg);
+                ImGui::PopStyleColor();
+            }
+
+            if (ImGui::Button("自检导航网格", ImVec2(140.0f * S(), 24.0f * S())))
+                ovnavui::diag();
+            ImGui::SameLine(0.0f, 8.0f * S());
+            ImGui::TextDisabled("（点一次：报告能否取到当前地图 NavMesh）");
+        }
+
+        ovnavui::Item items[256];
+        int n = 0;
+        ovnavui::fetch(nav_cat, items, 256, n);
+
+        ImGui::BeginChild("##navlist", ImVec2(0, 300.0f * S()), true);
+        int shown = 0;
+        for (int i = 0; i < n; ++i) {
+            const ovnavui::Item& it = items[i];
+            if (nav_filter[0]) {
+                // 大小写不敏感子串匹配（name 优先，其次可读名）
+                auto contains = [](const char* hay, const char* needle) {
+                    if (!needle[0]) return true;
+                    for (const char* h = hay; *h; ++h) {
+                        const char* a = h; const char* b = needle;
+                        while (*b && *a && std::tolower((unsigned char)*a) == std::tolower((unsigned char)*b)) { ++a; ++b; }
+                        if (!*b) return true;
+                    }
+                    return false;
+                };
+                if (!contains(it.name, nav_filter) && !contains(it.label, nav_filter)) continue;
+            }
+            if (++shown > 100) break;   // 列表上限
+            const char* nm = it.label[0] ? it.label : (it.name[0] ? it.name : "(未命名)");
+            char row[192];
+            snprintf(row, sizeof row, "%s  (%.0fm)", nm, it.dist);
+            ImGui::PushID(i);
+            const bool pressed = ImGui::Button("寻路", ImVec2(46.0f * S(), 20.0f * S()));
+            ImGui::SameLine(0.0f, 4.0f * S());
+            const bool tp = ImGui::Button("传送", ImVec2(46.0f * S(), 20.0f * S()));
+            ImGui::SameLine(0.0f, 8.0f * S());
+            ImGui::TextUnformatted(row);
+            ImGui::PopID();
+            if (pressed) ovnavui::request_to(it.x, it.y, it.z);
+            if (tp) ovnavui::request_teleport(it.x, it.y, it.z);
+        }
+        if (n == 0) ImGui::TextDisabled("（无数据：等 ESP 扫描出该类对象，或切换类别）");
+        ImGui::EndChild();
+
+        KeyValueF("缓存", "%d 个", n);
+    }
+    CardEnd();
+
     ImGui::EndGroup();
 }
 
@@ -252,7 +353,7 @@ void PageBattle()
     {
         ToggleRow("无限能量", &Cfg().inf_sp);
         Mark(Cfg().inf_sp && St().inf_sp_applied);
-        Hint("放开技能与大招的能量判定");
+        Hint("技能消耗置 0，能量判定恒真");
     }
     CardEnd();
 
@@ -284,7 +385,7 @@ void PageBattle()
     {
         ToggleRow("无冷却", &Cfg().no_cd);
         Mark(Cfg().no_cd && St().no_cd_applied);
-        Hint("大招与武器技能不再进入冷却(不过并不稳定)");
+        Hint("关闭角色冷却判定并清零 CD 显示");
     }
     CardEnd();
 
