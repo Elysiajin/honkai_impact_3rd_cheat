@@ -35,6 +35,42 @@ inline ImVec4 Mix(const ImVec4& a, const ImVec4& b, float t)
                   a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
 }
 
+// 统一主题 Token：深蓝紫玻璃 + 雾紫主强调 + 冰蓝辅助。
+// 颜色集中在此，避免散落在各绘制函数；alpha 按无实时模糊的伪磨砂设定。
+namespace theme
+{
+    inline constexpr unsigned Accent     = 0xA970FFu; // 雾紫，主强调
+    inline constexpr unsigned AccentSoft = 0xD4B8FFu; // 弱强调/高光
+    inline constexpr unsigned Cyan       = 0x6FD8F0u; // 冰蓝，辅助点缀
+    inline constexpr unsigned TextHi     = 0xF2EEFFu;
+    inline constexpr unsigned TextMid    = 0xB0ABC4u;
+    inline constexpr unsigned TextLow    = 0x858098u;
+    inline constexpr unsigned Success    = 0x76D6B0u;
+    inline constexpr unsigned Warning    = 0xF0B66Eu;
+    inline constexpr unsigned Danger     = 0xF07891u;
+    inline constexpr unsigned WinBg      = 0x111326u;
+    inline constexpr unsigned PanelBg    = 0x191B34u;
+    inline constexpr unsigned CardBg     = 0x242540u;
+    inline constexpr unsigned CardHover  = 0x2D2B4Bu;
+    inline constexpr unsigned Border     = 0x3B3652u;
+
+    inline constexpr float WinAlpha    = 0.92f;
+    inline constexpr float PanelAlpha  = 0.94f;
+    inline constexpr float CardAlpha   = 0.90f;
+    inline constexpr float HoverAlpha  = 0.96f;
+    inline constexpr float BorderAlpha = 0.30f;
+    inline constexpr float EdgeAlpha   = 0.60f;
+}
+
+inline ImVec4 C(unsigned hex, float a = 1.0f) { return Hex(hex, a); }
+inline ImU32  CU(unsigned hex, float a = 1.0f) { return U32(Hex(hex, a)); }
+
+inline float Smooth(float t)
+{
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 struct FontSet
 {
     ImFont* display = nullptr;

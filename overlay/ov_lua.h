@@ -239,6 +239,35 @@ inline void add_states_from_object(ov::Data& d, Session& s, uintptr_t obj)
     }
 }
 
+// 快速路径：LuaScriptMgr 静态区里的 Instance → <lua> → LuaState → +0x60 = L，只探测静态区与单个对象，不扫堆。
+inline bool find_state_fast(ov::Data& d, Session& s)
+{
+    if (!s.lua_klass) s.lua_klass = ovr::FindKlass("LuaState");
+    if (!s.script_klass) s.script_klass = ovr::FindKlass("LuaScriptMgr");
+    const uintptr_t sk = s.script_klass;
+    const uintptr_t lk = s.lua_klass;
+    if (!sk || !lk) return false;
+    uintptr_t sf = 0;
+    if (!d.rd_u64(sk + 0xB8, sf) || !sf || !d.readable(sf, 0x20)) return false;
+    for (uintptr_t off = 0; off < 0x100; off += 8)
+    {
+        uintptr_t inst = 0;
+        if (!d.rd_u64(sf + off, inst) || !inst || !d.readable(inst, 0x40)) continue;
+        uintptr_t ik = 0;
+        if (!d.rd_u64(inst, ik) || ik != sk) continue;
+        for (uintptr_t fo = 0x10; fo < 0x300; fo += 8)
+        {
+            uintptr_t ls = 0;
+            if (!d.rd_u64(inst + fo, ls) || !ls || !d.readable(ls, 0x80)) continue;
+            uintptr_t lk2 = 0;
+            if (!d.rd_u64(ls, lk2) || lk2 != lk) continue;
+            add_state(d, s, ls, true);
+            return s.n > 0;
+        }
+    }
+    return false;
+}
+
 inline void start_scan(ov::Data& d, Session& s)
 {
     if (!resolve(d, s)) return;
@@ -248,6 +277,13 @@ inline void start_scan(ov::Data& d, Session& s)
     s.regions = d.rt.scan_regions();
     s.scanning = true;
     s.mgr_n = 0;
+
+    if (find_state_fast(d, s))
+    {
+        s.scanning = false;
+        lstrcpynA(s.msg, "LuaState 快速定位（LuaScriptMgr 静态字段）", (int)sizeof s.msg);
+        return;
+    }
 
     // 只信任挂在 LuaManager._luaState(+0x18) 上的主状态；
     // 裸扫到的 LuaState 可能是子线程、未初始化实例或假阳性。
@@ -348,10 +384,17 @@ inline std::string wrap_code(const char* code)
     s += "local __out={}\n";
     s += "local __oldprint=print\n";
     s += "print=function(...) local t={} for i=1,select('#',...) do t[#t+1]=tostring(select(i,...)) end __out[#__out+1]=table.concat(t,'\\t') end\n";
+    // 指令数硬上限：防止死循环/长循环把游戏主线程冻住；debug 不可用时降级为无限制。
+    s += "local __steps=0\n";
+    s += "local __hooked=false\n";
+    s += "if type(debug)=='table' and type(debug.sethook)=='function' then\n";
+    s += "  pcall(function() debug.sethook(function() __steps=__steps+1 if __steps>200000 then error('Lua 指令超限') end end,'',1000) __hooked=true end)\n";
+    s += "end\n";
     s += "local __fn=function()\n";
     s += code ? code : "";
     s += "\nend\n";
     s += "local __res={pcall(__fn)}\n";
+    s += "if __hooked then pcall(function() debug.sethook() end) end\n";
     s += "print=__oldprint\n";
     s += "local __ok=table.remove(__res,1)\n";
     s += "if not __ok then\n";
@@ -366,6 +409,9 @@ inline std::string wrap_code(const char* code)
 inline bool exec(ov::Data& d, Session& s, int sel, const char* code, std::string& out)
 {
     out.clear();
+    if (!code) { out = "空脚本"; return false; }
+    const size_t clen = std::strlen(code);
+    if (clen == 0 || clen > 4096) { out = "脚本为空或超过 4096 字节"; return false; }
     if (!s.mi || !s.fn)
     {
         if (!resolve(d, s)) { out = s.msg; return false; }

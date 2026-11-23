@@ -33,7 +33,7 @@ UI界面 → 右侧最下方 → 「MCP 服务」卡片
 - `监听端口`：默认 `18517`
 - `状态`：已停止 / 启动中 / 运行中 / 停止中
 - `地址`：运行中时显示 `http://127.0.0.1:<端口>/mcp`
-- `工具数`：7
+- `工具数`：8
 - 启动失败时显示错误原因
 
 修改端口后，服务会在端口数值稳定约 800ms 后自动重启；启动失败会退避 3 秒重试。
@@ -75,6 +75,7 @@ npx mcp-remote http://127.0.0.1:18517/mcp
 | `disassemble` | Zydis 反汇编 | 超过 96 条自动落盘 |
 | `call_function` | 在游戏主线程调用 x64 函数 | 无 |
 | `call_method` | 按 IL2CPP 约定调用方法 | 无 |
+| `lua_eval` | 在游戏主线程执行 Lua 5.1 脚本，返回 print/返回值 | 无（输出上限约 4KB） |
 
 地址参数统一使用十六进制字符串，例如 `"0x7FF612340000"`。
 
@@ -105,7 +106,7 @@ npx mcp-remote http://127.0.0.1:18517/mcp
     "state": 2,
     "port": 18517,
     "file_dir": "D:\\My Projects\\Honkai Impact\\mcp_file",
-    "tools": 7,
+    "tools": 8,
     "error": ""
   }
 }
@@ -370,6 +371,48 @@ fpr[0..3] → XMM0..XMM3
 }
 ```
 
+### 3.8 lua_eval
+
+在游戏主线程执行 Lua 5.1 脚本，返回 `print` 输出和脚本返回值。
+
+参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `code` | string | 是 | Lua 5.1 脚本，最大 4096 字节 |
+| `timeout_ms` | integer | 否 | 等待游戏线程的毫秒数，默认 3000，范围 100–10000 |
+
+返回示例：
+
+```json
+{
+  "ok": true,
+  "output": "LuaManager : userdata\nLua 5.1",
+  "elapsed_ms": 2,
+  "thread": "game"
+}
+```
+
+行为与安全：
+
+- 复用 `call_*` 的游戏主线程队列，MCP 线程不直接碰 Lua VM。
+- 只使用第一个通过 `LuaManager` 校验的 `LuaState`，不会用未校验状态。
+- 脚本由 `pcall` 包裹；`debug.sethook` 可用时限制 20 万条指令，防止死循环冻结游戏。
+- 代码长度上限 4096 字节，输出截断到约 4KB，队列上限 64、每帧最多执行 2 个任务。
+- 前提是已在 Lua 控制台点过「刷新状态」并完成扫描；否则返回明确错误，不会尝试执行。
+- **仍然可以调用游戏 C# 方法**：参数错误或调用不存在的成员可能导致崩溃。AI 应优先做只读探测（`pairs` / `pcall` / `GetType` / `GetMethods`），确认存在后再调用。
+
+示例：
+
+```json
+{
+  "name": "lua_eval",
+  "arguments": {
+    "code": "return _VERSION"
+  }
+}
+```
+
 ---
 
 ## 4. 大文件传输
@@ -438,6 +481,24 @@ D:\My Projects\Honkai Impact\mcp_file
 
 返回 `raw_path` 和 `text_path`，AI 直接读取 `.txt` 即可。
 
+### 5.5 用 Lua 自动发现游戏 API
+
+1. 先在 Lua 控制台点「刷新状态」，确认有已校验的 `LuaState`；
+2. `lua_eval` 执行 `return _VERSION` 验证链路；
+3. 用受控脚本探测 `LuaManager` 的元表 / `GetType():GetMethods()`；
+4. 找到方法名后先用 `pcall` 调只读查询，确认参数类型再执行写操作。
+
+例：
+
+```json
+{
+  "name": "lua_eval",
+  "arguments": {
+    "code": "local ok,r=pcall(function() return LuaManager:GetLuaMemoryKB() end) return tostring(ok)..' '..tostring(r)"
+  }
+}
+```
+
 ---
 
 ## 6. 错误与排障
@@ -463,6 +524,7 @@ D:\My Projects\Honkai Impact\mcp_file
 - 服务只绑定 `127.0.0.1`，不对局域网开放
 - 没有鉴权，本机其他进程也可以连接；多人环境请自行加防火墙/代理限制
 - `write_memory` 和 `call_*` 可以直接改游戏状态，签名错误会导致崩溃
+- `lua_eval` 的 Lua 错误和死循环已被拦截，但通过 xLua 调用 C# 方法时参数/类型错误仍可能崩溃；先探测再调用
 - 仅用于离线单机逆向学习；在线游戏使用可能触发反作弊
 
 已知限制：
@@ -491,7 +553,7 @@ build_overlay.bat
 ..\..\cxxmcp-master           cxxmcp 源码
 ..\..\cxxmcp-build-mingw      cxxmcp 静态库（MinGW GCC 13.1）
 ..\..\zydis-master            Zydis 源码
-..\..\zydis-build-mingw       Zydis 静态库（Decoder + Formatter）
+..\..\..\zydis-build-mingw    Zydis 静态库（Decoder + Formatter）
 ```
 
 说明：

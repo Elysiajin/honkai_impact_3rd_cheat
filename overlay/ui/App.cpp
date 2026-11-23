@@ -78,11 +78,11 @@ void AppFrame(float dt)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetWindowPos();
 
-    dl->AddRectFilled(ImVec2(p.x + L, p.y), ImVec2(p.x + W, p.y + H), ImGui::GetColorU32(ImVec4(21.0f / 255.0f, 21.0f / 255.0f, 26.0f / 255.0f, 1.0f)), ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersRight);
-    dl->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + L, p.y + H), ImGui::GetColorU32(ImVec4(35.0f / 255.0f, 32.0f / 255.0f, 45.0f / 255.0f, 200.0f / 255.0f)), ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersLeft);
-    dl->AddRect(ImVec2(p.x, p.y), ImVec2(p.x + W, p.y + H), ImGui::GetColorU32(ImVec4(39.0f / 255.0f, 38.0f / 255.0f, 45.0f / 255.0f, 1.0f)), ImGui::GetStyle().WindowRounding, ImDrawFlags_None, 1.5f);
-    dl->AddRectFilled(ImVec2(p.x + L, p.y), ImVec2(p.x + L + 1.5f * s, p.y + H), ImGui::GetColorU32(ImVec4(39.0f / 255.0f, 38.0f / 255.0f, 45.0f / 255.0f, 1.0f)), 0.0f);
-    dl->AddLine(ImVec2(p.x + L, p.y + 45.0f * s), ImVec2(p.x + W, p.y + 45.0f * s), ImGui::GetColorU32(ImVec4(38.0f / 255.0f, 37.0f / 255.0f, 43.0f / 255.0f, 1.0f)), 0.5f);
+    dl->AddRectFilled(ImVec2(p.x + L, p.y), ImVec2(p.x + W, p.y + H), CU(theme::PanelBg, theme::PanelAlpha), ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersRight);
+    dl->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + L, p.y + H), CU(theme::WinBg, 0.96f), ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersLeft);
+    dl->AddRect(ImVec2(p.x, p.y), ImVec2(p.x + W, p.y + H), CU(theme::Border, theme::EdgeAlpha), ImGui::GetStyle().WindowRounding, ImDrawFlags_None, 1.5f);
+    dl->AddRectFilled(ImVec2(p.x + L, p.y), ImVec2(p.x + L + 1.5f * s, p.y + H), CU(theme::Border, theme::EdgeAlpha), 0.0f);
+    dl->AddLine(ImVec2(p.x + L, p.y + 45.0f * s), ImVec2(p.x + W, p.y + 45.0f * s), CU(theme::Border, 0.7f), 0.5f);
 
     if (cruin_0)
         dl->AddText(cruin_0, 25.0f * s, ImVec2(p.x + 45.0f * s, p.y + 11.0f * s), ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f)), "崩坏 3");
@@ -123,18 +123,23 @@ void AppFrame(float dt)
     }
     ImGui::EndGroup();
 
-    if (g_tab != g_active)
+    if (!cfg.anim_on)
     {
-        g_tab_alpha = ImClamp(g_tab_alpha - 5.0f * dt, 0.0f, 1.0f);
+        g_active = g_tab;              // 关闭动效：立即切页，直接显示终态
+        g_tab_alpha = 1.0f;
+    }
+    else if (g_tab != g_active)
+    {
+        g_tab_alpha = ImClamp(g_tab_alpha - 6.0f * dt, 0.0f, 1.0f);
         if (g_tab_alpha <= 0.01f) { g_active = g_tab; g_tab_alpha = 0.0f; }
     }
     else
     {
-        g_tab_alpha = ImClamp(g_tab_alpha + 5.0f * dt, 0.0f, 1.0f);
+        g_tab_alpha = ImClamp(g_tab_alpha + 6.0f * dt, 0.0f, 1.0f);
     }
 
     ImGui::SetCursorPos(ImVec2(205.0f * s, 62.0f * s));
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.15f + 0.85f * g_tab_alpha);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.25f + 0.75f * Smooth(g_tab_alpha));
     ImGui::BeginChild("##content", ImVec2(566.0f * s, 495.0f * s), true, ImGuiWindowFlags_NoBackground);
     switch ((Page)g_active)
     {

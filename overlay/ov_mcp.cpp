@@ -42,6 +42,7 @@ constexpr size_t kMaxTextDump   = 4u * 1024u * 1024u;
 constexpr int    kMaxDisasm     = 4096;
 constexpr size_t kMaxInlineArray = 1024;
 constexpr int    kMaxJobQueue   = 64;
+constexpr size_t kMaxLuaCode    = 4096;
 constexpr unsigned short kDefaultPort = 18517;
 const char* const kFileDir = "D:\\My Projects\\Honkai Impact\\mcp_file";
 
@@ -88,6 +89,7 @@ struct CallJob
     bool                    done = false;
     bool                    cancelled = false;
     bool                    ok = false;
+    int                     kind = 0;   // 0 = x64 call, 1 = lua eval
     uint64_t                fn = 0;
     uint64_t                gpr[8] = {};
     float                   fpr[4] = {};
@@ -96,10 +98,16 @@ struct CallJob
     float                   xmm0 = 0.0f;
     uint64_t                exec_ms = 0;
     char                    error[160] = { 0 };
+    std::string             code;
+    std::string             out;
+    std::string             err;
 };
 
 std::mutex g_jobs_mu;
 std::vector<std::shared_ptr<CallJob>> g_jobs;
+
+std::mutex        g_lua_handler_mu;
+LuaEvalHandler    g_lua_handler;
 
 // ---------------------------------------------------------------- 基础工具
 std::string Hex64(uint64_t v)
@@ -601,6 +609,69 @@ Json SubmitCall(uint64_t fn, const uint64_t gpr[8], const float fpr[4], int time
         j["thread"] = "game";
         return j;
     }
+}
+
+void FinishLuaJob(const std::shared_ptr<CallJob>& job, bool ok,
+                  const std::string& err, const std::string& out, uint64_t exec_ms)
+{
+    {
+        std::lock_guard<std::mutex> lock(job->mu);
+        job->ok = ok;
+        job->err = err;
+        job->out = out;
+        job->exec_ms = exec_ms;
+        job->done = true;
+    }
+    job->cv.notify_all();
+}
+
+Json SubmitLua(const std::string& code, int timeout_ms)
+{
+    if (code.empty()) return ErrJson("Lua 代码为空");
+    if (code.size() > kMaxLuaCode) return ErrJson("Lua 代码超过 4096 字节");
+    if (code.find('\0') != std::string::npos) return ErrJson("Lua 代码包含 NUL 字节");
+
+    {
+        std::lock_guard<std::mutex> lock(g_lua_handler_mu);
+        if (!g_lua_handler) return ErrJson("Lua 执行器未注册（等待 overlay 初始化）");
+    }
+
+    auto job = std::make_shared<CallJob>();
+    job->kind = 1;
+    job->code = code;
+    job->deadline = GetTickCount64() + (uint64_t)timeout_ms;
+
+    {
+        std::lock_guard<std::mutex> lock(g_jobs_mu);
+        if (g_jobs.size() >= (size_t)kMaxJobQueue) return ErrJson("调用队列已满");
+        g_jobs.push_back(job);
+    }
+
+    bool finished = false;
+    std::string out, err;
+    uint64_t exec_ms = 0;
+    bool ok = false;
+    {
+        std::unique_lock<std::mutex> lock(job->mu);
+        finished = job->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                                    [&] { return job->done; });
+        if (!finished)
+        {
+            job->cancelled = true;
+            return ErrJson("等待游戏线程执行 Lua 超时（OnGameThreadTick 未运行或脚本阻塞）");
+        }
+        ok = job->ok;
+        out = job->out;
+        err = job->err;
+        exec_ms = job->exec_ms;
+    }
+    if (!ok) return ErrJson(err.empty() ? "Lua 执行失败" : err);
+
+    Json j = OkJson();
+    j["output"] = out;
+    j["elapsed_ms"] = exec_ms;
+    j["thread"] = "game";
+    return j;
 }
 
 // ---------------------------------------------------------------- 工具实现
@@ -1134,6 +1205,21 @@ Json ToolCallMethod(const Json& in)
     }
 }
 
+Json ToolLuaEval(const Json& in)
+{
+    try
+    {
+        if (!Contains(in, "code") || !in.at("code").is_string())
+            return ErrJson("缺少字符串参数 code");
+        const std::string code = in.at("code").get<std::string>();
+        return SubmitLua(code, ClampTimeout(in));
+    }
+    catch (const std::exception& e)
+    {
+        return ErrJson(e.what());
+    }
+}
+
 // ---------------------------------------------------------------- 服务生命周期
 Json ReadSchema()
 {
@@ -1197,6 +1283,16 @@ Json CallMethodSchema()
         { "address", "method_info" });
 }
 
+Json LuaSchema()
+{
+    return SchemaOf(
+        {
+            { "code", Prop("string", "Lua 5.1 脚本，最大 4096 字节，游戏主线程执行") },
+            { "timeout_ms", Prop("integer", "等待游戏线程的毫秒数，默认 3000，范围 100-10000") },
+        },
+        { "code" });
+}
+
 Json SymbolsSchema()
 {
     return SchemaOf(
@@ -1243,6 +1339,10 @@ auto BuildServer(unsigned short port)
                   .description("按 IL2CPP 约定调用实例/静态方法：this 可选，MethodInfo 放在最后一个整数参数。MethodInfo 无效会导致游戏崩溃。")
                   .input_schema(CallMethodSchema())
                   .handler([](const Json& in) { return ToolCallMethod(in); }))
+        .tool(mcp::server::tool<Json, Json>("lua_eval")
+                  .description("在游戏主线程执行 Lua 5.1 脚本并返回 print/返回值。仅使用已通过 LuaManager 校验的 LuaState；pcall 包裹并限制指令数，不会因 Lua 错误中断游戏。参数错误或调用不存在的 C# 方法仍可能崩溃，优先做只读探测。")
+                  .input_schema(LuaSchema())
+                  .handler([](const Json& in) { return ToolLuaEval(in); }))
         .build();
 }
 
@@ -1400,7 +1500,13 @@ std::string Error()
 
 const char* FileDir() { return kFileDir; }
 
-int ToolCount() { return 7; }
+void SetLuaEvalHandler(LuaEvalHandler handler)
+{
+    std::lock_guard<std::mutex> lock(g_lua_handler_mu);
+    g_lua_handler = std::move(handler);
+}
+
+int ToolCount() { return 8; }
 
 void UpdateGameStatus(uintptr_t ua, bool ready, int avatars, int monsters,
                       bool cam_ok, const char* msg)
@@ -1438,6 +1544,30 @@ void OnGameThreadTick()
                 job->cv.notify_all();
                 continue;
             }
+        }
+
+        if (job->kind == 1)
+        {
+            LuaEvalHandler handler;
+            {
+                std::lock_guard<std::mutex> lock(g_lua_handler_mu);
+                handler = g_lua_handler;
+            }
+            if (!handler)
+            {
+                FinishLuaJob(job, false, "Lua 执行器未注册", "", 0);
+                continue;
+            }
+
+            std::string out, err;
+            bool ok = false;
+            const uint64_t t0 = GetTickCount64();
+            try { ok = handler(job->code, out, err); }
+            catch (const std::exception& e) { err = e.what(); }
+            catch (...) { err = "Lua 执行器抛出未知异常"; }
+            const uint64_t used = GetTickCount64() - t0;
+            FinishLuaJob(job, ok, err, out, used);
+            continue;
         }
 
         if (!IsExecutable((uintptr_t)job->fn))

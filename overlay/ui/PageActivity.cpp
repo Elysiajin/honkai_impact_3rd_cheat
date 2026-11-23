@@ -29,9 +29,9 @@ static const int kActCount = (int)(sizeof kActs / sizeof kActs[0]);
 static void UnitRow(const Status::ActUnit& u, int idx)
 {
     const bool enemy = (u.camp == 2);
-    const ImVec4 col = enemy ? ImVec4(0.94f, 0.42f, 0.42f, 1.0f)
-                             : (u.camp == 1 ? ImVec4(0.42f, 0.82f, 0.94f, 1.0f)
-                                            : ImVec4(0.55f, 0.55f, 0.60f, 1.0f));
+    const ImVec4 col = enemy ? C(theme::Danger)
+                             : (u.camp == 1 ? C(theme::Cyan)
+                                            : C(theme::TextLow));
     char line[96];
     char tag[32] = { 0 };
     char raw[16] = { 0 };
@@ -75,7 +75,7 @@ void PageActivity()
             if (ImGui::Selectable(kActs[i].name, Cfg().act_pick == i, 0, ImVec2(0.0f, 26.0f * S())))
                 Cfg().act_pick = i;
             ImGui::SameLine(0.0f, 8.0f * S());
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.44f, 0.44f, 0.49f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextLow));
             ImGui::TextUnformatted(kActs[i].tag);
             ImGui::PopStyleColor();
             ImGui::PopID();

@@ -105,6 +105,92 @@ static ova::ActCtx              g_act_ctx;
 static int                      g_act_kill_marks = 0;
 static ovlua::Session           g_lua;
 static std::atomic<bool>        g_god_state{ false };
+
+// MCP lua_eval 执行器：只在游戏主线程被调用，和 UI 共用 g_lua。
+// 逐个校验已信任的 LuaState，选当前真正可用的那个（通常靠后的状态）。
+static const char* kGadgetLua =
+    "luanet.load_assembly('UnityEngine')\n"
+    "local O=luanet.import_type('UnityEngine.Object')\n"
+    "local out={}\n"
+    "local function dump(cls,tag)\n"
+    " local T=luanet.ctype(luanet.import_type(cls))\n"
+    " local a=O.FindObjectsOfType(T)\n"
+    " for i=0,a.Length-1 do\n"
+    "  local c=a:GetValue(i)\n"
+    "  local g=c.gameObject\n"
+    "  local t=g.transform.position\n"
+    "  local guid,ag='0',''\n"
+    "  pcall(function() local cf=c._gadgetActor.GadgetConfig guid=tostring(cf.GUID) ag=tostring(cf.ActionGraphPath) end)\n"
+    "  out[#out+1]=string.format('%s|%s|%.2f|%.2f|%.2f|%s|%s',tag,g.name,t.x,t.y,t.z,guid,ag)\n"
+    " end\n"
+    "end\n"
+    "dump('MoleMole.PJMS.PJMSGadgetEntity','G')\n"
+    "dump('MoleMole.PJMS.PJMSNPCEntity','N')\n"
+    "return table.concat(out,'\\n')\n";
+
+static bool mcp_lua_eval(const std::string& code, std::string& out, std::string& err)
+{
+    out.clear();
+    err.clear();
+    if (!g_data.ready_ok()) { err = "内存未就绪"; return false; }
+    if (code.empty() || code.size() > 4096) { err = "Lua 代码为空或超过 4096 字节"; return false; }
+
+    if ((!g_lua.mi || !g_lua.fn) && !ovlua::resolve(g_data, g_lua))
+    {
+        err = g_lua.msg;
+        return false;
+    }
+    if (g_lua.n <= 0)
+    {
+        err = "没有 LuaState，请先在 Lua 控制台点“刷新状态”";
+        return false;
+    }
+
+    // 用和 ovlua::exec 相同的字段校验，避免选中已失效的假阳性状态。
+    auto state_alive = [&](uintptr_t p) -> bool
+    {
+        uintptr_t k = 0, L = 0;
+        uint64_t mon = 0;
+        if (!g_data.rd(p, k) || k != g_lua.lua_klass) return false;
+        if (!g_data.rd(p + 0x08, mon) || mon >= 0x1000) return false;
+        if (!g_data.rd(p + 0x60, L) || !L || !g_data.readable(L, 8)) return false;
+        return true;
+    };
+
+    int sel = -1;
+    for (int i = g_lua.n - 1; i >= 0; --i)
+    {
+        if (g_lua.trusted[i] && state_alive(g_lua.states[i])) { sel = i; break; }
+    }
+    if (sel < 0)
+    {
+        err = "没有可用的已校验 LuaState，请在 Lua 控制台重新刷新状态";
+        return false;
+    }
+
+    const bool ok = ovlua::exec(g_data, g_lua, sel, code.c_str(), out);
+    if (!ok)
+    {
+        err = out.empty() ? g_lua.msg : out;
+        out.clear();
+    }
+    return ok;
+}
+// 每秒一次：游戏线程里用 Lua 取 PJMS 实体快照，喂给绘制层，不再扫堆。
+static void collect_gadgets_lua()
+{
+    static uint64_t last = 0;
+    const uint64_t now = GetTickCount64();
+    if (now - last < 1000) return;
+    last = now;
+    if (!g_data.ready_ok()) return;
+    if (g_lua.n <= 0 && !g_lua.scanning) ovlua::start_scan(g_data, g_lua);
+    if (g_lua.n <= 0) return;
+    std::string out, err;
+    if (!mcp_lua_eval(kGadgetLua, out, err)) return;
+    ovn::publish_lua_feed(out);
+}
+
 struct GameExchange {
     ui::Settings cfg;
     ui::Requests req;
@@ -220,6 +306,7 @@ static void tick_game_thread() {
     if (!sampling_lock.owns_lock()) return;
     // MCP 的函数调用只在游戏主线程执行，避免跨线程调 IL2CPP。
     ovmcp::OnGameThreadTick();
+    collect_gadgets_lua();
     static uint64_t last_init = 0;
     ui::Settings cfg;
     ui::Requests rq;
@@ -520,6 +607,9 @@ static bool init_gui(IDXGISwapChain* sc) {
     g_dx11_ready = ImGui_ImplDX11_Init(g_dev, g_ctx);
     if (!g_dx11_ready) { reset_gui(); return false; }
     g_game_thread_id = thread_id;
+    ovmcp::SetLuaEvalHandler([](const std::string& code, std::string& out, std::string& err) {
+        return mcp_lua_eval(code, out, err);
+    });
     g_sample_hwnd = g_hwnd;
     g_sample_hook = SetWindowsHookExW(WH_GETMESSAGE, game_message_hook, g_self, thread_id);
     if (!g_sample_hook) { reset_gui(); return false; }
@@ -771,6 +861,17 @@ static void draw_esp(float dt) {
         ImVec4(cfg.gadget_col[0], cfg.gadget_col[1], cfg.gadget_col[2], cfg.gadget_col[3]));
     const ImU32 col_npc = ImGui::ColorConvertFloat4ToU32(
         ImVec4(cfg.npc_col[0], cfg.npc_col[1], cfg.npc_col[2], cfg.npc_col[3]));
+    const ImU32 col_chest = IM_COL32(255, 199, 92, 240);
+    const ImU32 col_collect = IM_COL32(110, 220, 255, 240);
+    const ImU32 col_challenge = IM_COL32(255, 140, 90, 240);
+    const ImU32 col_game = IM_COL32(190, 150, 255, 240);
+    auto pjms_col = [&](const ovn::Ent& e, ImU32 base) {
+        if (e.cat == 0) return col_chest;
+        if (e.cat == 1) return col_collect;
+        if (e.cat == 2) return col_challenge;
+        if (e.cat == 3) return col_game;
+        return base;
+    };
 
     const bool show_box  = cfg.esp_box;
     const bool show_name = cfg.esp_name;
@@ -885,8 +986,9 @@ static void draw_esp(float dt) {
             ImVec2 a(x - w * 0.5f, y), b(x + w * 0.5f, y + hh);
             if (b.x < -32.0f || a.x > sw + 32.0f || b.y < -32.0f || a.y > sh + 32.0f) continue;
 
+            const ImU32 cc = pjms_col(e, color);
             ray_to(a, b);
-            if (show_box) draw_box(dl, a, b, color);
+            if (show_box) draw_box(dl, a, b, cc);
             if (show_name) {
                 const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
                 if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", nm, dist);
@@ -899,7 +1001,7 @@ static void draw_esp(float dt) {
                 dl->AddText(f, fsz, ImVec2(tx + 1.0f, ty), sh, line);
                 dl->AddText(f, fsz, ImVec2(tx, ty - 1.0f), sh, line);
                 dl->AddText(f, fsz, ImVec2(tx, ty + 1.0f), sh, line);
-                dl->AddText(f, fsz, ImVec2(tx, ty), color, line);
+                dl->AddText(f, fsz, ImVec2(tx, ty), cc, line);
             }
             if (++drawn >= 400) break;
         }

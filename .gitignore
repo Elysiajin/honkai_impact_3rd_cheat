@@ -30,3 +30,6 @@ overlay/*.o
 
 # MCP 运行时数据
 mcp_file/
+
+# 本地工具缓存
+.workbuddy/

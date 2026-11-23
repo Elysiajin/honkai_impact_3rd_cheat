@@ -59,7 +59,7 @@ void CardEnd()
 
 void Hint(const char* txt)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.40f, 0.40f, 0.45f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextLow));
     ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x);
     ImGui::TextUnformatted(txt);
     ImGui::PopTextWrapPos();
@@ -69,7 +69,7 @@ void Hint(const char* txt)
 void Stat(const char* value, const char* unit, const char* label)
 {
     ImGui::PushFont(ubu_1);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.74f, 0.00f, 1.00f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::Accent));
     ImGui::TextUnformatted(value);
     ImGui::PopStyleColor();
     ImGui::PopFont();
@@ -77,13 +77,13 @@ void Stat(const char* value, const char* unit, const char* label)
     {
         ImGui::SameLine(0.0f, 6.0f * S());
         ImGui::PushFont(ubu_preview);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.44f, 0.44f, 0.49f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
         ImGui::TextUnformatted(unit);
         ImGui::PopStyleColor();
         ImGui::PopFont();
     }
     ImGui::PushFont(ubu_preview);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.50f, 0.50f, 0.55f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
     ImGui::TextUnformatted(label);
     ImGui::PopStyleColor();
     ImGui::PopFont();
@@ -92,9 +92,9 @@ void Stat(const char* value, const char* unit, const char* label)
 void Mark(bool on)
 {
     if (on)
-        ImGui::TextColored(ImVec4(0.74f, 0.00f, 1.00f, 1.0f), "生效中");
+        ImGui::TextColored(C(theme::Success), "生效中");
     else
-        ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.53f, 1.0f), "未启用");
+        ImGui::TextColored(C(theme::TextLow), "未启用");
 }
 
 void PageHome()
@@ -113,9 +113,9 @@ void PageHome()
         Stat(buf, "", "敌人数量");
 
         if (s.data_ready)
-            ImGui::TextColored(ImVec4(0.74f, 0.00f, 1.00f, 1.0f), "内存就绪");
+            ImGui::TextColored(C(theme::Success), "内存就绪");
         else
-            ImGui::TextColored(ImVec4(0.94f, 0.42f, 0.42f, 1.0f), "内存等待");
+            ImGui::TextColored(C(theme::Warning), "内存等待");
     }
     CardEnd();
 
@@ -244,7 +244,7 @@ void PageEsp()
         for (int c = 0; c < 4; ++c) {
             if (c) ImGui::SameLine(0.0f, 4.0f * S());
             bool on = (nav_cat == c);
-            if (on) ImGui::PushStyleColor(ImGuiCol_Button, Mix(Hex(0x3AA0FF), Hex(0x20242C), 0.35f));
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, C(theme::Accent, 0.55f));
             if (ImGui::Button(cats[c], ImVec2((546.0f - 3 * 4.0f * S()) / 4.0f, 24.0f * S())))
                 nav_cat = c;
             if (on) ImGui::PopStyleColor();
@@ -257,26 +257,26 @@ void PageEsp()
         {
             const char* msg = ovnavui::last_msg();
             const bool ok = ovnavui::last_ok();
-            ImGui::PushStyleColor(ImGuiCol_Text, ok ? Hex(0x7FD37F) : Hex(0xFF9090));
+            ImGui::PushStyleColor(ImGuiCol_Text, ok ? C(theme::Success) : C(theme::Danger));
             ImGui::TextWrapped("结果：%s", msg && msg[0] ? msg : "尚未寻路");
             ImGui::PopStyleColor();
 
             const char* tpm = ovnavui::tp_text();
             if (tpm && tpm[0]) {
-                ImGui::PushStyleColor(ImGuiCol_Text, Hex(0x9FD0FF));
+                ImGui::PushStyleColor(ImGuiCol_Text, C(theme::Cyan));
                 ImGui::Text("传送：%s", tpm);
                 ImGui::PopStyleColor();
             }
 
             char dbg[256];
             ovnavui::debug_info(dbg, (int)sizeof dbg);
-            ImGui::PushStyleColor(ImGuiCol_Text, Hex(0x8FA0B0));
+            ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
             ImGui::TextWrapped("链路：%s", dbg);
             ImGui::PopStyleColor();
 
             const char* dg = ovnavui::diag_text();
             if (dg && dg[0]) {
-                ImGui::PushStyleColor(ImGuiCol_Text, Hex(0xE0C070));
+                ImGui::PushStyleColor(ImGuiCol_Text, C(theme::Warning));
                 ImGui::TextWrapped("自检：%s", dg);
                 ImGui::PopStyleColor();
             }
@@ -516,7 +516,7 @@ void PageUi()
 
 void PageAbout()
 {
-	ImGui::TextColored(ImVec4(0.74f, 0.00f, 1.00f, 1.0f), "作者：Jin | Elysia");
+	ImGui::TextColored(C(theme::AccentSoft), "作者：Jin | Elysia");
     char buf[64];
 
     ImGui::BeginGroup();

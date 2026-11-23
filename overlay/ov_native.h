@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -21,6 +22,7 @@ struct Ent {
     uintptr_t k = 0;
     std::string name;   // 类名
     std::string label;  // 可读名
+    int cat = 0;        // 0宝箱 1采集 2挑战 3数字游戏 4传送 5围栏 6其它交互
     float x = 0, y = 0, z = 0;
 };
 
@@ -29,6 +31,8 @@ struct State {
     uintptr_t avatar_mgr = 0, monster_mgr = 0;
     std::vector<Ent> monsters, avatars;
     std::vector<Ent> gadgets, npcs, props;
+    uint64_t lua_stamp = 0;
+    bool lua_ok = false;
     uint64_t pjms_t = 0;
     bool pjms_sync_done = false;
     uintptr_t prop_k = 0;
@@ -271,6 +275,34 @@ struct PjmsScanCtx {
     int cap = 256;
 };
 
+// 按 ActionGraphPath 归类；返回 false 表示该类监听器不画（Empty）。
+inline bool classify_gadget(const char* graph, int& cat, std::string& label)
+{
+    cat = 6;
+    label = "交互物";
+    if (!graph) return true;
+    auto has = [&](const char* k) { return std::strstr(graph, k) != nullptr; };
+    if (has("Empty")) return false;
+    if (has("Chest") || has("Treasure") || has("Box")) {
+        cat = 0;
+        if (has("Elite")) label = "精英宝箱";
+        else if (has("Rare") || has("Epic")) label = "稀有宝箱";
+        else if (has("Luxury") || has("Legend")) label = "豪华宝箱";
+        else label = "宝箱";
+    } else if (has("Collect") || has("Gather") || has("Pick")) {
+        cat = 1; label = "采集物";
+    } else if (has("Challenge")) {
+        cat = 2; label = "挑战点";
+    } else if (has("Game") || has("Puzzle") || has("Number") || has("Digital")) {
+        cat = 3; label = "数字游戏";
+    } else if (has("Teleport")) {
+        cat = 4; label = "传送点";
+    } else if (has("Fence") || has("Ring")) {
+        cat = 5; label = "围栏";
+    }
+    return true;
+}
+
 inline bool pjms_scan_cb(uintptr_t addr, uintptr_t value, void* vctx) {
     PjmsScanCtx* c = (PjmsScanCtx*)vctx;
     if (value != c->klass || !c->out) return true;
@@ -297,13 +329,7 @@ inline bool pjms_scan_cb(uintptr_t addr, uintptr_t value, void* vctx) {
         if (!c->d->rd(addr + 0xD8, cfg) || !cfg) return true;
         char graph[192] = {};
         if (!c->d->read_il2str(cfg, 0x20, graph, sizeof graph) || !graph[0]) return true;
-        const bool chest = std::strstr(graph, "Chest") != nullptr;
-        const bool collect = std::strstr(graph, "Collect") != nullptr;
-        if (!chest && !collect) return true;
-        if (std::strstr(graph, "EliteChest")) e.label = "精英宝箱";
-        else if (std::strstr(graph, "RareChest")) e.label = "稀有宝箱";
-        else if (chest) e.label = "宝箱";
-        else e.label = "采集物";
+        if (!classify_gadget(graph, e.cat, e.label)) return true;
     } else {
         e.label = "NPC";
     }
@@ -361,6 +387,78 @@ struct PjmsCache {
 inline PjmsCache& pjms_cache() {
     static PjmsCache c;
     return c;
+}
+
+// Lua 采集快照：游戏线程里 FindObjectsOfType 的结果，格式每行 tag|name|x|y|z|guid|ag。
+struct LuaFeed {
+    std::mutex mtx;
+    std::string raw;
+    uint64_t stamp = 0;
+};
+
+inline LuaFeed& lua_feed() {
+    static LuaFeed f;
+    return f;
+}
+
+inline void publish_lua_feed(const std::string& raw) {
+    std::lock_guard<std::mutex> lock(lua_feed().mtx);
+    lua_feed().raw = raw;
+    lua_feed().stamp = GetTickCount64();
+}
+
+inline bool parse_lua_feed(State& s) {
+    std::string raw;
+    uint64_t stamp = 0;
+    {
+        std::lock_guard<std::mutex> lock(lua_feed().mtx);
+        if (!lua_feed().stamp) return false;
+        if (GetTickCount64() - lua_feed().stamp > 6000) {
+            s.lua_ok = false;
+            return false;
+        }
+        raw = lua_feed().raw;
+        stamp = lua_feed().stamp;
+    }
+    if (stamp == s.lua_stamp && s.lua_ok) return true;
+    s.lua_stamp = stamp;
+    s.gadgets.clear();
+    s.npcs.clear();
+    size_t pos = 0;
+    while (pos < raw.size()) {
+        size_t eol = raw.find('\n', pos);
+        if (eol == std::string::npos) eol = raw.size();
+        const std::string line = raw.substr(pos, eol - pos);
+        pos = eol + 1;
+        if (line.empty()) continue;
+        std::vector<std::string> f;
+        size_t p0 = 0;
+        for (;;) {
+            const size_t p1 = line.find('|', p0);
+            f.push_back(line.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0));
+            if (p1 == std::string::npos) break;
+            p0 = p1 + 1;
+        }
+        if (f.size() < 6) continue;
+        Ent e;
+        e.name = f[1];
+        e.x = (float)atof(f[2].c_str());
+        e.y = (float)atof(f[3].c_str());
+        e.z = (float)atof(f[4].c_str());
+        e.p = (uintptr_t)strtoull(f[5].c_str(), nullptr, 10);
+        if (!e.p) e.p = 0x4000000000000000ULL + (uintptr_t)s.gadgets.size();
+        if (f[0] == "N") {
+            e.cat = 9;
+            e.label = "NPC";
+            s.npcs.push_back(e);
+            continue;
+        }
+        const std::string ag = f.size() > 6 ? f[6] : "";
+        if (!classify_gadget(ag.c_str(), e.cat, e.label)) continue;
+        s.gadgets.push_back(e);
+    }
+    s.lua_ok = true;
+    return true;
 }
 
 // 扫描放到后台线程：窗口线程只取缓存，避免每 3 秒卡一下。
@@ -548,6 +646,9 @@ inline void refresh_ents(ov::Data& d, State& s) {
     }
 
     // PJMS 宝箱/采集物/NPC：扫描在后台线程完成，窗口线程只取缓存。
+    // 优先用游戏线程里的 Lua 快照（真实 Transform）；拿不到才退回旧的堆扫描。
+    const bool lua_snapshot = parse_lua_feed(s);
+    if (!lua_snapshot) {
     start_pjms_worker();
     if (!s.prop_k)
         s.prop_k = resolve_pjms_klass(d, "MonoSimpleProp", 36619u, 0x500019DEC08ULL);
@@ -575,6 +676,7 @@ inline void refresh_ents(ov::Data& d, State& s) {
         if (gk) scan_pjms(d, gk, true, s.gadgets, anchor);
         uintptr_t nk = resolve_pjms_klass(d, "PJMSNPCActor", 74163u, 0x5000113FE58ULL);
         if (nk) scan_pjms(d, nk, false, s.npcs, anchor);
+    }
     }
     refresh_player_pos(d, s);
     do_teleport(d, s);

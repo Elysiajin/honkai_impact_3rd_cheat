@@ -11,14 +11,14 @@ namespace ui
 
 void TextDim(const char* txt)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(66.f / 255.f, 65.f / 255.f, 70.f / 255.f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
     ImGui::TextUnformatted(txt);
     ImGui::PopStyleColor();
 }
 
 void TextBright(const char* txt)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextHi));
     ImGui::TextUnformatted(txt);
     ImGui::PopStyleColor();
 }
@@ -26,7 +26,7 @@ void TextBright(const char* txt)
 void GroupTitle(const char* txt)
 {
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(77.f / 255.f, 80.f / 255.f, 97.f / 255.f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
     ImGui::TextUnformatted(txt);
     ImGui::PopStyleColor();
     ImGui::Spacing();
@@ -34,14 +34,14 @@ void GroupTitle(const char* txt)
 
 void KeyValue(const char* key, const char* value)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(66.f / 255.f, 65.f / 255.f, 70.f / 255.f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
     ImGui::TextUnformatted(key);
     ImGui::PopStyleColor();
 
     const ImVec2 p = ImGui::GetCursorPos();
     const float  w = ImGui::CalcTextSize(value, NULL, true).x;
     ImGui::SetCursorPos(ImVec2(ImGui::GetContentRegionMax().x - w - 20.0f * S(), p.y));
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.86f, 0.86f, 0.88f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextHi));
     ImGui::TextUnformatted(value);
     ImGui::PopStyleColor();
 }
@@ -92,8 +92,8 @@ DialogResult Dialog(const char* id, bool* open, const char* title, const char* b
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(sz, ImGuiCond_Always);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(21.f / 255.f, 21.f / 255.f, 26.f / 255.f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(39.f / 255.f, 38.f / 255.f, 45.f / 255.f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, C(theme::PanelBg, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, C(theme::Border, theme::EdgeAlpha));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f * S());
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22 * S(), 20 * S()));
 
@@ -107,13 +107,13 @@ DialogResult Dialog(const char* id, bool* open, const char* title, const char* b
     if (ImGui::Begin(win, NULL, flags))
     {
         ImGui::PushFont(ubu_0);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+        ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextHi));
         ImGui::TextUnformatted(title);
         ImGui::PopStyleColor();
         ImGui::PopFont();
 
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.72f, 0.76f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
         ImGui::PushTextWrapPos(sz.x - 44.0f * S());
         ImGui::TextUnformatted(body);
         ImGui::PopTextWrapPos();
@@ -122,7 +122,7 @@ DialogResult Dialog(const char* id, bool* open, const char* title, const char* b
         const float by = sz.y - (20.0f + 37.0f + 26.0f) * S();
         ImGui::SetCursorPos(ImVec2(22.0f * S(), by));
 
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(28.f / 255.f, 30.f / 255.f, 35.f / 255.f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, C(theme::CardBg, 0.92f));
         if (ImGui::Button(cancel, ImVec2(110.0f * S(), 37.0f * S())))
         {
             r.cancelled = true;
@@ -132,8 +132,7 @@ DialogResult Dialog(const char* id, bool* open, const char* title, const char* b
 
         ImGui::SameLine(0.0f, 10.0f * S());
 
-        const ImVec4 okc = danger ? ImVec4(0.62f, 0.16f, 0.20f, 1.0f)
-                                  : c::accent_color;
+        const ImVec4 okc = danger ? C(theme::Danger, 0.85f) : C(theme::Accent);
         ImGui::PushStyleColor(ImGuiCol_Button, okc);
         if (ImGui::Button(ok, ImVec2(110.0f * S(), 37.0f * S())))
         {

@@ -5,7 +5,7 @@ set IMGUI=..\libs\ImGuiSaphire
 set CXXMCP=..\..\cxxmcp-master
 set CXXMCP_LIB=..\..\cxxmcp-build-mingw
 set ZYDIS=..\..\zydis-master
-if not defined ZYDIS_LIB set ZYDIS_LIB=..\..\zydis-build-mingw
+if not defined ZYDIS_LIB set ZYDIS_LIB=..\..\..\zydis-build-mingw
 if not defined OUT_DLL set OUT_DLL=bh3_overlay.dll
 cd /d "%~dp0"
 
