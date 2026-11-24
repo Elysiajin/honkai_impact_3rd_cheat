@@ -92,8 +92,8 @@ DialogResult Dialog(const char* id, bool* open, const char* title, const char* b
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(sz, ImGuiCond_Always);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, C(theme::PanelBg, 0.98f));
-    ImGui::PushStyleColor(ImGuiCol_Border, C(theme::Border, theme::EdgeAlpha));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, C(theme::WinBg, 0.94f));
+    ImGui::PushStyleColor(ImGuiCol_Border, C(0xFFFFFFu, theme::EdgeAlpha));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f * S());
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22 * S(), 20 * S()));
 

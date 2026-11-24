@@ -37,6 +37,13 @@ struct Settings
     bool  anim_on   = true;
     bool  show_grid = true;
     int   page      = 0;
+
+    // 空间材质：0=原深紫主题，1..7=参考项目七套主题。
+    int   theme          = 1;     // 默认「瓷白」，对应你截图里的风格
+    float glass_alpha    = 1.0f;  // 玻璃浓度倍率
+    float backdrop_alpha = 0.42f; // 全屏蓝绿背景强度
+    int   star_count     = 110;   // 星点数量
+
     bool  esp_smooth = true;
     bool  esp_team  = true;
     bool  gadget_on = true;
@@ -160,5 +167,7 @@ const char* AppVersion();
 const char* AppBuildTime();
 
 void StateInit();
+void LoadConfig();
+void SaveConfig();
 
 }

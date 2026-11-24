@@ -2,6 +2,7 @@
 #include "State.h"
 #include "Widgets.h"
 #include "UiCore.h"
+#include "Glass.h"
 #include "saphire_colors.h"
 #include "imgui_internal.h"
 
@@ -441,6 +442,25 @@ void PageBattle()
 void PageUi()
 {
     char buf[64];
+
+    if (Card("空间材质", ImVec2(546.0f, 236.0f)))
+    {
+        ImGui::Combo("主题", &Cfg().theme, glass::kThemeNames, glass::ThemeCount);
+        ImGui::SliderFloat("玻璃浓度", &Cfg().glass_alpha, 0.20f, 1.0f, "%.2f");
+        ImGui::SliderFloat("背景强度", &Cfg().backdrop_alpha, 0.0f, 0.80f, "%.2f");
+        ImGui::SliderInt("星点数量", &Cfg().star_count, 0, 200);
+        if (ImGui::Button("恢复默认", ImVec2(110.0f * S(), 28.0f * S())))
+        {
+            Cfg().theme = 1;
+            Cfg().glass_alpha = 1.0f;
+            Cfg().backdrop_alpha = 0.42f;
+            Cfg().star_count = 110;
+        }
+        ImGui::SameLine(0.0f, 8.0f * S());
+        if (ImGui::Button("保存配置", ImVec2(110.0f * S(), 28.0f * S())))
+            SaveConfig();
+    }
+    CardEnd();
 
     ImGui::BeginGroup();
 

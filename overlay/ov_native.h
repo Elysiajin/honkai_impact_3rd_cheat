@@ -6,10 +6,9 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
-#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ovn {
@@ -31,11 +30,8 @@ struct State {
     uintptr_t avatar_mgr = 0, monster_mgr = 0;
     std::vector<Ent> monsters, avatars;
     std::vector<Ent> gadgets, npcs, props;
-    uint64_t lua_stamp = 0;
-    bool lua_ok = false;
-    uint64_t pjms_t = 0;
-    bool pjms_sync_done = false;
-    uintptr_t prop_k = 0;
+    uintptr_t gadget_mgr = 0;
+    uint64_t gadget_t = 0;
     float player_pos[3] = { 0, 0, 0 };
     bool player_ok = false;
     uint64_t player_t = 0;
@@ -245,36 +241,6 @@ inline bool cam_fast(ov::Data& d, State& s) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// PJMS 世界对象（第二部城市/开放世界）。以下偏移来自本 build 的真机 MCP 只读验证：
-//   PJMSGadgetActor  klass 0x5000113E560 (tdi 74105/0x12179)
-//   PJMSNPCActor     klass 0x5000113FE58 (tdi 74163/0x121B3)
-//   PJMSBaseActor._position        = +0x98
-//   PJMSGadgetActor._gadgetConfig  = +0xD8
-//   PJMSGadgetConfig.ActionGraphPath = +0x20
-// 类指针优先按名解析；解析不到时使用 fallback，但仍校验 tdi + 类名，避免版本变化后误读。
-inline uintptr_t resolve_pjms_klass(ov::Data& d, const char* name, uint32_t tdi, uintptr_t fallback) {
-    uintptr_t cand[2] = { 0, fallback };
-    if (ovl::Ready()) cand[0] = ovr::FindKlass(name);
-    for (uintptr_t k : cand) {
-        if (!k) continue;
-        uint32_t got = 0;
-        if (!d.rd(k + 0x88, got) || got != tdi) continue;
-        char nm[128] = {};
-        if (!d.copy_name(k, nm, sizeof nm) || std::strcmp(nm, name) != 0) continue;
-        return k;
-    }
-    return 0;
-}
-
-struct PjmsScanCtx {
-    ov::Data* d = nullptr;
-    uintptr_t klass = 0;
-    std::vector<Ent>* out = nullptr;
-    bool gadget = false;
-    int cap = 256;
-};
-
 // 按 ActionGraphPath 归类；返回 false 表示该类监听器不画（Empty）。
 inline bool classify_gadget(const char* graph, int& cat, std::string& label)
 {
@@ -303,197 +269,131 @@ inline bool classify_gadget(const char* graph, int& cat, std::string& label)
     return true;
 }
 
-inline bool pjms_scan_cb(uintptr_t addr, uintptr_t value, void* vctx) {
-    PjmsScanCtx* c = (PjmsScanCtx*)vctx;
-    if (value != c->klass || !c->out) return true;
-    if ((int)c->out->size() >= c->cap) return false;
-    for (const Ent& e : *c->out) if (e.p == addr) return true;
-
-    float x = 0, y = 0, z = 0;
-    if (!c->d->rd(addr + 0x98, x) || !c->d->rd(addr + 0x9C, y) || !c->d->rd(addr + 0xA0, z))
-        return true;
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return true;
-    if (std::fabs(x) > 100000.0f || std::fabs(y) > 100000.0f || std::fabs(z) > 100000.0f)
-        return true;
-
-    Ent e;
-    e.p = addr;
-    e.k = c->klass;
-    e.x = x;
-    e.y = y;
-    e.z = z;
-    e.name = c->d->name_of(c->klass);
-
-    if (c->gadget) {
-        uintptr_t cfg = 0;
-        if (!c->d->rd(addr + 0xD8, cfg) || !cfg) return true;
-        char graph[192] = {};
-        if (!c->d->read_il2str(cfg, 0x20, graph, sizeof graph) || !graph[0]) return true;
-        if (!classify_gadget(graph, e.cat, e.label)) return true;
-    } else {
-        e.label = "NPC";
-    }
-    c->out->push_back(e);
-    return true;
-}
-
-inline void scan_pjms(ov::Data& d, uintptr_t klass, bool gadget, std::vector<Ent>& out,
-                      uintptr_t near_va = 0) {
-    out.clear();
-    if (!klass) return;
-    PjmsScanCtx c;
-    c.d = &d;
-    c.klass = klass;
-    c.out = &out;
-    c.gadget = gadget;
-    if (!near_va) near_va = 0x700CE65C000ULL;
-    // 只扫 AvatarManager 附近的 256MB：PJMS actor 与管理器在同一片托管堆。
-    ovr::ScanQwords(klass, &pjms_scan_cb, &c, 1u << 18, near_va, 256ULL << 20);
-}
-
-struct PropAddrCtx {
-    uintptr_t klass = 0;
-    std::vector<uintptr_t>* out = nullptr;
-    int cap = 64;
-};
-
-inline bool prop_addr_cb(uintptr_t addr, uintptr_t value, void* vctx) {
-    PropAddrCtx* c = (PropAddrCtx*)vctx;
-    if (value != c->klass || !c->out) return true;
-    if ((int)c->out->size() >= c->cap) return false;
-    for (uintptr_t p : *c->out) if (p == addr) return true;
-    c->out->push_back(addr);
-    return true;
-}
-
-inline void scan_prop_addrs(uintptr_t klass, uintptr_t near_va, std::vector<uintptr_t>& out) {
-    out.clear();
-    if (!klass) return;
-    if (!near_va) near_va = 0x700CE65C000ULL;
-    PropAddrCtx c;
-    c.klass = klass;
-    c.out = &out;
-    ovr::ScanQwords(klass, &prop_addr_cb, &c, 1u << 18, near_va, 256ULL << 20);
-}
-
-struct PjmsCache {
-    std::mutex mtx;
-    std::vector<Ent> gadgets;
-    std::vector<Ent> npcs;
-    std::vector<uintptr_t> props;
-    uint64_t stamp = 0;
-};
-
-inline PjmsCache& pjms_cache() {
-    static PjmsCache c;
-    return c;
-}
-
-// Lua 采集快照：游戏线程里 FindObjectsOfType 的结果，格式每行 tag|name|x|y|z|guid|ag。
-struct LuaFeed {
-    std::mutex mtx;
-    std::string raw;
-    uint64_t stamp = 0;
-};
-
-inline LuaFeed& lua_feed() {
-    static LuaFeed f;
-    return f;
-}
-
-inline void publish_lua_feed(const std::string& raw) {
-    std::lock_guard<std::mutex> lock(lua_feed().mtx);
-    lua_feed().raw = raw;
-    lua_feed().stamp = GetTickCount64();
-}
-
-inline bool parse_lua_feed(State& s) {
-    std::string raw;
-    uint64_t stamp = 0;
-    {
-        std::lock_guard<std::mutex> lock(lua_feed().mtx);
-        if (!lua_feed().stamp) return false;
-        if (GetTickCount64() - lua_feed().stamp > 6000) {
-            s.lua_ok = false;
-            return false;
+// SingletonManager 的注册表：SingletonManager.GetSingletonInstance 用的
+// Dictionary<string, object>，key 是 "MoleMole.*" 全类型名。
+// [UA+0x2555EB0] -> host，host+0x3A3D0 -> Dictionary。
+inline uintptr_t registry_instance(ov::Data& d, const char* want)
+{
+    if (!d.ready_ok() || !want) return 0;
+    uintptr_t host = 0, dict = 0;
+    if (!d.rd(d.ua + 0x2555EB0, host) || !host) return 0;
+    if (!d.rd(host + 0x3A3D0, dict) || !dict) return 0;
+    uintptr_t k = 0;
+    if (!d.rd(dict, k) || !k) return 0;
+    char cn[64] = {};
+    if (!d.copy_name(k, cn, sizeof cn) || std::strcmp(cn, "Dictionary`2") != 0) return 0;
+    uintptr_t entries = 0;
+    int32_t n = 0;
+    if (!d.rd(dict + 0x20, entries) || !entries) return 0;
+    if (!d.rd(entries + 0x18, n) || n <= 0 || n > 4096) return 0;
+    const uintptr_t data = entries + 0x20;
+    for (int32_t i = 0; i < n; ++i) {
+        const uintptr_t e = data + (uintptr_t)i * 0x18;
+        uintptr_t key = 0;
+        if (!d.rd(e + 8, key) || !key) continue;
+        int32_t len = 0;
+        if (!d.rd(key + 0x10, len) || len <= 0 || len > 96) continue;
+        char tmp[100] = {};
+        bool ok = true;
+        for (int32_t j = 0; j < len; ++j) {
+            uint16_t ch = 0;
+            if (!d.rd(key + 0x14 + (uintptr_t)j * 2, ch) || ch < 0x20 || ch > 0x7E) {
+                ok = false;
+                break;
+            }
+            tmp[j] = (char)ch;
         }
-        raw = lua_feed().raw;
-        stamp = lua_feed().stamp;
-    }
-    if (stamp == s.lua_stamp && s.lua_ok) return true;
-    s.lua_stamp = stamp;
-    s.gadgets.clear();
-    s.npcs.clear();
-    size_t pos = 0;
-    while (pos < raw.size()) {
-        size_t eol = raw.find('\n', pos);
-        if (eol == std::string::npos) eol = raw.size();
-        const std::string line = raw.substr(pos, eol - pos);
-        pos = eol + 1;
-        if (line.empty()) continue;
-        std::vector<std::string> f;
-        size_t p0 = 0;
-        for (;;) {
-            const size_t p1 = line.find('|', p0);
-            f.push_back(line.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0));
-            if (p1 == std::string::npos) break;
-            p0 = p1 + 1;
-        }
-        if (f.size() < 6) continue;
-        Ent e;
-        e.name = f[1];
-        e.x = (float)atof(f[2].c_str());
-        e.y = (float)atof(f[3].c_str());
-        e.z = (float)atof(f[4].c_str());
-        e.p = (uintptr_t)strtoull(f[5].c_str(), nullptr, 10);
-        if (!e.p) e.p = 0x4000000000000000ULL + (uintptr_t)s.gadgets.size();
-        if (f[0] == "N") {
-            e.cat = 9;
-            e.label = "NPC";
-            s.npcs.push_back(e);
-            continue;
-        }
-        const std::string ag = f.size() > 6 ? f[6] : "";
-        if (!classify_gadget(ag.c_str(), e.cat, e.label)) continue;
-        s.gadgets.push_back(e);
-    }
-    s.lua_ok = true;
-    return true;
-}
-
-// 扫描放到后台线程：窗口线程只取缓存，避免每 3 秒卡一下。
-inline DWORD WINAPI pjms_worker(LPVOID) {
-    // 这里不调用 Data::init()：rd/copy_name/read_il2str 只依赖 ReadProcessMemory，
-    // 避免后台线程重复初始化 profile 与主线程竞争。
-    ov::Data d;
-    for (;;) {
-        const uintptr_t gk = resolve_pjms_klass(d, "PJMSGadgetActor", 74105u, 0x5000113E560ULL);
-        const uintptr_t nk = resolve_pjms_klass(d, "PJMSNPCActor", 74163u, 0x5000113FE58ULL);
-        const uintptr_t pk = resolve_pjms_klass(d, "MonoSimpleProp", 36619u, 0x500019DEC08ULL);
-        uintptr_t anchor = ovl::AvatarManager();
-        if (!anchor) anchor = ovl::MonsterManager();
-        if (!anchor) anchor = 0x700CE65C000ULL;
-        std::vector<Ent> gs, ns;
-        std::vector<uintptr_t> ps;
-        if (gk) scan_pjms(d, gk, true, gs, anchor);
-        if (nk) scan_pjms(d, nk, false, ns, anchor);
-        if (pk) scan_prop_addrs(pk, anchor, ps);
-        {
-            std::lock_guard<std::mutex> lock(pjms_cache().mtx);
-            pjms_cache().gadgets.swap(gs);
-            pjms_cache().npcs.swap(ns);
-            pjms_cache().props.swap(ps);
-            pjms_cache().stamp = GetTickCount64();
-        }
-        Sleep(5000);
+        if (!ok || std::strcmp(tmp, want) != 0) continue;
+        uintptr_t val = 0;
+        return d.rd(e + 0x10, val) ? val : 0;
     }
     return 0;
 }
 
-inline void start_pjms_worker() {
-    static std::atomic<bool> started(false);
-    if (started.exchange(true)) return;
-    CreateThread(nullptr, 0, &pjms_worker, nullptr, 0, nullptr);
+// PJMSGadgetManager._allGadgetActors：注册表取管理器实例，实例 +0x38 是 List。
+// actor +0x98/0x9C/0xA0 为坐标；+0xD8 是 PJMSGadgetConfig，+0x20 是 ActionGraphPath。
+inline void refresh_gadget_mgr(ov::Data& d, State& s)
+{
+    if (!d.ready_ok()) { s.gadget_mgr = 0; return; }
+    if (s.t - s.gadget_t >= 1000) {
+        s.gadget_mgr = registry_instance(d, "MoleMole.PJMS.PJMSGadgetManager");
+        s.gadget_t = s.t;
+    }
+    if (!s.gadget_mgr) return;
+    uintptr_t list = 0;
+    std::vector<uintptr_t> ps;
+    if (!d.rd(s.gadget_mgr + 0x38, list) || !list || !read_list(d, list, ps, 512)) {
+        // 场景切换后实例失效：清空并等下一次注册表查找。
+        s.gadget_mgr = 0;
+        s.gadgets.clear();
+        return;
+    }
+    std::vector<Ent> gs;
+    gs.reserve(ps.size());
+    // 配置/分类只随 actor 变化，缓存，避免每帧逐字符读字符串拖帧。
+    struct GInfo {
+        uintptr_t cfg = 0;
+        bool draw = false;
+        int cat = 6;
+        std::string name, label;
+    };
+    static std::unordered_map<uintptr_t, GInfo> info_cache;
+    static uintptr_t info_mgr = 0;
+    if (info_mgr != s.gadget_mgr || info_cache.size() > 20000) {
+        info_cache.clear();
+        info_mgr = s.gadget_mgr;
+    }
+    for (uintptr_t p : ps) {
+        uintptr_t k = 0;
+        if (!d.rd(p, k) || !k) continue;
+        // 未实例化/已卸载的 actor（LOD、占位）没有实体，旧 Lua 的 FindObjectsOfType 也看不到。
+        uintptr_t ent = 0, native = 0;
+        if (!d.rd(p + 0x28, ent) || !ent) continue;
+        if (!d.rd(ent + 0x10, native) || !native) continue;
+        uintptr_t cfg = 0;
+        if (!d.rd(p + 0xD8, cfg)) cfg = 0;
+        auto it = info_cache.find(p);
+        if (it == info_cache.end() || it->second.cfg != cfg) {
+            GInfo gi;
+            gi.cfg = cfg;
+            char cls[96] = {};
+            if (cfg && d.copy_name(k, cls, sizeof cls) && std::strstr(cls, "PJMSGadgetActor")) {
+                char pn[96] = {}, lt[96] = {}, ag[128] = {};
+                const bool has_pn = d.read_il2str(cfg, 0x10, pn, sizeof pn);
+                const bool has_lt = d.read_il2str(cfg, 0x18, lt, sizeof lt);
+                const bool has_ag = d.read_il2str(cfg, 0x20, ag, sizeof ag);
+                // PointName/LOD/AG 带 Empty 的都是占位，和旧 Lua 的 name 过滤一致；
+                // Listener 是不可见触发体，不是可交互对象。
+                const bool bad = (has_pn && std::strstr(pn, "Empty")) ||
+                                 (has_lt && std::strstr(lt, "Empty")) ||
+                                 (has_ag && std::strstr(ag, "Empty")) ||
+                                 (has_ag && std::strstr(ag, "Listener"));
+                if (!bad) {
+                    gi.name = has_pn ? pn : cls;
+                    if (has_ag) {
+                        gi.draw = classify_gadget(ag, gi.cat, gi.label);
+                    } else {
+                        gi.cat = 6;
+                        gi.label = "交互物";
+                        gi.draw = true;
+                    }
+                }
+            }
+            if (it == info_cache.end()) it = info_cache.emplace(p, std::move(gi)).first;
+            else it->second = std::move(gi);
+        }
+        if (!it->second.draw) continue;
+        Ent e;
+        e.p = p;
+        e.name = it->second.name;
+        e.cat = it->second.cat;
+        e.label = it->second.label;
+        if (!d.rd(p + 0x98, e.x) || !d.rd(p + 0x9C, e.y) || !d.rd(p + 0xA0, e.z)) continue;
+        if (!std::isfinite(e.x) || !std::isfinite(e.y) || !std::isfinite(e.z)) continue;
+        if (std::fabs(e.x) > 1e5f || std::fabs(e.y) > 1e5f || std::fabs(e.z) > 1e5f) continue;
+        gs.push_back(std::move(e));
+    }
+    s.gadgets.swap(gs);
 }
 
 // 玩家真实世界坐标：用 BaseMonoEntity.get_RootNodePosition，避免距离跟相机转动变化。
@@ -504,61 +404,68 @@ inline void refresh_player_pos(ov::Data& d, State& s) {
     }
     if (s.player_t && s.t - s.player_t < 100) return;
     s.player_t = s.t;
-    s.player_ok = false;
     struct Sig { unsigned char b[8]; } sig{};
     if (!d.rd(d.ua + 0x79C36F0, sig)) return;
     if (!(sig.b[0] == 0x56 && sig.b[1] == 0x48 && sig.b[2] == 0x83 && sig.b[3] == 0xEC &&
           sig.b[4] == 0x30 && sig.b[5] == 0x48 && sig.b[6] == 0x89 && sig.b[7] == 0xCE)) return;
     typedef void (*GetPosFn)(void*, void*, void*);
-    float p[3] = {};
-    ((GetPosFn)(d.ua + 0x79C36F0))((void*)p, (void*)s.avatars[0].p, nullptr);
-    if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) return;
-    if (std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) < 0.01f) return;
-    memcpy(s.player_pos, p, sizeof p);
-    s.player_ok = true;
-}
-
-// MonoSimpleProp（关卡道具）：坐标用 BaseMonoPropObject.get_XYZPosition；
-// 只加入晶体/采集物一类，避免把灯笼、锚点全部画出来。
-inline void refresh_props(ov::Data& d, State& s, const std::vector<uintptr_t>& addrs) {
-    s.props.clear();
-    if (!d.ua || !s.prop_k || addrs.empty()) return;
-    struct Sig { unsigned char b[8]; } sig{};
-    if (!d.rd(d.ua + 0x5B902D0, sig)) return;
-    if (!(sig.b[0] == 0x56 && sig.b[1] == 0x48 && sig.b[2] == 0x83 && sig.b[3] == 0xEC &&
-          sig.b[4] == 0x30 && sig.b[5] == 0x48 && sig.b[6] == 0x89 && sig.b[7] == 0xCE)) return;
-    typedef void (*GetPosFn)(void*, void*, void*);
-    for (uintptr_t obj : addrs) {
-        uintptr_t k = 0;
-        if (!d.rd(obj, k) || k != s.prop_k) continue;
-        char name[128] = {}, tag[128] = {};
-        d.read_il2str(obj, 0x288, name, sizeof name);
-        d.read_il2str(obj, 0x290, tag, sizeof tag);
-        auto has = [](const char* v, const char* k2) {
-            return v[0] && std::strstr(v, k2) != nullptr;
-        };
-        const bool crystal = has(name, "ScanEffect") || has(name, "Memory") || has(name, "Crystal") ||
-                             has(name, "Shard") || has(name, "Pian") || has(name, "Fragment") ||
-                             has(name, "Collect") || has(tag, "Collect");
-        // 只对已验证安全的晶体类调用 getter；VN/普通道具的 Transform 不一定是场景实例，
-        // 直接调用会崩，先跳过。
-        if (!crystal) continue;
-        uintptr_t tr = 0;
-        if (!d.rd(obj + 0x218, tr) || !tr) continue;
+    if (s.avatar_mgr) {
+        struct SigL { unsigned char b[8]; } sigl{};
+        if (d.rd(d.ua + 0x43E2DE0, sigl) &&
+            sigl.b[0] == 0x56 && sigl.b[1] == 0x48 && sigl.b[2] == 0x83 && sigl.b[3] == 0xEC &&
+            sigl.b[4] == 0x20 && sigl.b[5] == 0x48 && sigl.b[6] == 0x89 && sigl.b[7] == 0xCE) {
+            typedef void* (*GetLocalFn)(void*, void*);
+            uintptr_t local = (uintptr_t)((GetLocalFn)(d.ua + 0x43E2DE0))((void*)s.avatar_mgr, nullptr);
+            uintptr_t lk = 0;
+            if (local && d.rd(local, lk) && lk) {
+                char lname[128] = {};
+                if (d.copy_name(lk, lname, sizeof lname) && std::strstr(lname, "Avatar")) {
+                    float p[3] = {};
+                    ((GetPosFn)(d.ua + 0x79C36F0))((void*)p, (void*)local, nullptr);
+                    if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) &&
+                        std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) > 0.01f) {
+                        memcpy(s.player_pos, p, sizeof p);
+                        s.player_ok = true;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    const bool cam_ref = s.cam_ok &&
+        (std::fabs(s.cam_pos[0]) + std::fabs(s.cam_pos[1]) + std::fabs(s.cam_pos[2])) > 0.01f;
+    if (cam_ref && s.player_ok) {
+        const float px = s.player_pos[0] - s.cam_pos[0];
+        const float py = s.player_pos[1] - s.cam_pos[1];
+        const float pz = s.player_pos[2] - s.cam_pos[2];
+        if (px * px + py * py + pz * pz > 225.0f) s.player_ok = false;
+    }
+    bool found = false;
+    float best[3] = {};
+    float best_d2 = 0.0f;
+    for (const Ent& a : s.avatars) {
         float p[3] = {};
-        ((GetPosFn)(d.ua + 0x5B902D0))((void*)p, (void*)obj, nullptr);
+        ((GetPosFn)(d.ua + 0x79C36F0))((void*)p, (void*)a.p, nullptr);
         if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) continue;
         if (std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) < 0.01f) continue;
-        Ent e;
-        e.p = obj;
-        e.k = k;
-        e.x = p[0];
-        e.y = p[1];
-        e.z = p[2];
-        e.name = name;
-        e.label = "采集物";
-        s.props.push_back(e);
+        if (std::fabs(p[0]) > 1e5f || std::fabs(p[1]) > 1e5f || std::fabs(p[2]) > 1e5f) continue;
+        float d2 = 0.0f;
+        if (cam_ref) {
+            const float dx = p[0] - s.cam_pos[0];
+            const float dy = p[1] - s.cam_pos[1];
+            const float dz = p[2] - s.cam_pos[2];
+            d2 = dx * dx + dy * dy + dz * dz;
+        }
+        if (!found || d2 < best_d2) {
+            found = true;
+            best_d2 = d2;
+            memcpy(best, p, sizeof best);
+        }
     }
+    if (!found) return;
+    if (cam_ref && best_d2 > 225.0f) return;
+    memcpy(s.player_pos, best, sizeof best);
+    s.player_ok = true;
 }
 
 inline std::atomic<bool>& tp_req() {
@@ -584,13 +491,32 @@ inline void request_teleport(float x, float y, float z) {
     tp_req().store(true);
 }
 
+// 当前操作中的角色：AvatarManager.GetLocalAvatar，和玩家坐标用的是同一个对象。
+// 关卡里 avatar 列表可能有多个（队伍/替身），拿 list[0] 会传到没加载的实体上。
+inline uintptr_t local_avatar_ptr(ov::Data& d, State& s) {
+    if (!d.ua || !s.avatar_mgr) return 0;
+    struct SigL { unsigned char b[8]; } sigl{};
+    if (!d.rd(d.ua + 0x43E2DE0, sigl)) return 0;
+    if (!(sigl.b[0] == 0x56 && sigl.b[1] == 0x48 && sigl.b[2] == 0x83 && sigl.b[3] == 0xEC &&
+          sigl.b[4] == 0x20 && sigl.b[5] == 0x48 && sigl.b[6] == 0x89 && sigl.b[7] == 0xCE)) return 0;
+    typedef void* (*GetLocalFn)(void*, void*);
+    uintptr_t a = (uintptr_t)((GetLocalFn)(d.ua + 0x43E2DE0))((void*)s.avatar_mgr, nullptr);
+    uintptr_t k = 0;
+    char name[128] = {};
+    if (!a || !d.rd(a, k) || !k || !d.copy_name(k, name, sizeof name)) return 0;
+    if (!std::strstr(name, "Avatar")) return 0;
+    return a;
+}
+
 inline void do_teleport(ov::Data& d, State& s) {
     if (!tp_req().exchange(false)) return;
     if (!d.ua) {
         lstrcpynA(tp_msg(), "未初始化", 96);
         return;
     }
-    if (s.avatars.empty()) {
+    uintptr_t avatar = local_avatar_ptr(d, s);
+    if (!avatar && !s.avatars.empty()) avatar = s.avatars[0].p;
+    if (!avatar) {
         lstrcpynA(tp_msg(), "没有角色实例", 96);
         return;
     }
@@ -607,7 +533,7 @@ inline void do_teleport(ov::Data& d, State& s) {
     typedef void (*TpFn)(void*, void*, void*);
     const float* t = tp_pos();
     float pos[3] = { t[0], t[1] + 0.5f, t[2] };
-    ((TpFn)(d.ua + 0x995EC20))((void*)s.avatars[0].p, (void*)pos, nullptr);
+    ((TpFn)(d.ua + 0x995EC20))((void*)avatar, (void*)pos, nullptr);
     lstrcpynA(tp_msg(), "已传送到目标", 96);
 }
 
@@ -645,40 +571,7 @@ inline void refresh_ents(ov::Data& d, State& s) {
         s.monsters.clear();
     }
 
-    // PJMS 宝箱/采集物/NPC：扫描在后台线程完成，窗口线程只取缓存。
-    // 优先用游戏线程里的 Lua 快照（真实 Transform）；拿不到才退回旧的堆扫描。
-    const bool lua_snapshot = parse_lua_feed(s);
-    if (!lua_snapshot) {
-    start_pjms_worker();
-    if (!s.prop_k)
-        s.prop_k = resolve_pjms_klass(d, "MonoSimpleProp", 36619u, 0x500019DEC08ULL);
-    bool cache_updated = false;
-    std::vector<uintptr_t> prop_addrs;
-    {
-        std::lock_guard<std::mutex> lock(pjms_cache().mtx);
-        if (pjms_cache().stamp != s.pjms_t) {
-            // 每次扫描结果都必须覆盖，包括空结果；否则换场景/开箱后旧目标会一直残留。
-            s.gadgets = pjms_cache().gadgets;
-            s.npcs = pjms_cache().npcs;
-            prop_addrs = pjms_cache().props;
-            s.pjms_t = pjms_cache().stamp;
-            cache_updated = true;
-        }
-    }
-    if (cache_updated) refresh_props(d, s, prop_addrs);
-
-    // 后台线程首次结果为空时，同步补扫一次，避免一直 0 绘制。
-    if (!s.pjms_sync_done && s.gadgets.empty()) {
-        s.pjms_sync_done = true;
-        uintptr_t anchor = ovl::AvatarManager();
-        if (!anchor) anchor = ovl::MonsterManager();
-        uintptr_t gk = resolve_pjms_klass(d, "PJMSGadgetActor", 74105u, 0x5000113E560ULL);
-        if (gk) scan_pjms(d, gk, true, s.gadgets, anchor);
-        uintptr_t nk = resolve_pjms_klass(d, "PJMSNPCActor", 74163u, 0x5000113FE58ULL);
-        if (nk) scan_pjms(d, nk, false, s.npcs, anchor);
-    }
-    }
-    refresh_player_pos(d, s);
+    refresh_gadget_mgr(d, s);
     do_teleport(d, s);
 
     s.ready = s.avatar_mgr || s.monster_mgr;
@@ -701,6 +594,7 @@ inline void refresh(ov::Data& d, State& s) {
     refresh_ents(d, s);
     // No engine calls in the lobby/loading screen, or using last tick's camera.
     if (!s.avatars.empty() && cam_slow(d, s)) cam_fast(d, s);
+    refresh_player_pos(d, s);
 }
 
 static uint8_t g_behit_backup[12] = { 0 };

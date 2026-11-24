@@ -366,11 +366,20 @@ inline void step_scan(ov::Data& d, Session& s)
 inline bool read_managed_string(ov::Data& d, uintptr_t str, std::string& out)
 {
     int32_t len = 0;
-    if (!d.rd(str + 0x10, len) || len < 0 || len > 8192) return false;
+    if (!d.rd(str + 0x10, len) || len < 0 || len > (1 << 19)) return false;
     if (len == 0) { out = "(空字符串)"; return true; }
     std::vector<uint16_t> w((size_t)len);
-    for (int i = 0; i < len; ++i)
-        if (!d.rd(str + 0x14 + (uintptr_t)i * 2, w[(size_t)i])) return false;
+    const uintptr_t base = str + 0x14;
+    const size_t total = (size_t)len * 2;
+    for (size_t off = 0; off < total; )
+    {
+        const size_t chunk = (total - off) > (64u << 10) ? (64u << 10) : (total - off);
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(base + off),
+                               (uint8_t*)w.data() + off, chunk, &got) || got != chunk)
+            return false;
+        off += chunk;
+    }
     int n = WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)w.data(), len, nullptr, 0, nullptr, nullptr);
     if (n <= 0) return false;
     out.resize((size_t)n);
@@ -378,7 +387,7 @@ inline bool read_managed_string(ov::Data& d, uintptr_t str, std::string& out)
     return true;
 }
 
-inline std::string wrap_code(const char* code)
+inline std::string wrap_code(const char* code, bool guard_hook = true)
 {
     std::string s;
     s += "local __out={}\n";
@@ -387,9 +396,12 @@ inline std::string wrap_code(const char* code)
     // 指令数硬上限：防止死循环/长循环把游戏主线程冻住；debug 不可用时降级为无限制。
     s += "local __steps=0\n";
     s += "local __hooked=false\n";
-    s += "if type(debug)=='table' and type(debug.sethook)=='function' then\n";
-    s += "  pcall(function() debug.sethook(function() __steps=__steps+1 if __steps>200000 then error('Lua 指令超限') end end,'',1000) __hooked=true end)\n";
-    s += "end\n";
+    if (guard_hook)
+    {
+        s += "if type(debug)=='table' and type(debug.sethook)=='function' then\n";
+        s += "  pcall(function() debug.sethook(function() __steps=__steps+1 if __steps>200000 then error('Lua 指令超限') end end,'',1000) __hooked=true end)\n";
+        s += "end\n";
+    }
     s += "local __fn=function()\n";
     s += code ? code : "";
     s += "\nend\n";
@@ -406,7 +418,8 @@ inline std::string wrap_code(const char* code)
     return s;
 }
 
-inline bool exec(ov::Data& d, Session& s, int sel, const char* code, std::string& out)
+inline bool exec(ov::Data& d, Session& s, int sel, const char* code, std::string& out,
+                 size_t out_cap = 3900, bool need_trusted = true, bool guard_hook = true)
 {
     out.clear();
     if (!code) { out = "空脚本"; return false; }
@@ -422,7 +435,7 @@ inline bool exec(ov::Data& d, Session& s, int sel, const char* code, std::string
         return false;
     }
     if (sel < 0 || sel >= s.n) sel = 0;
-    if (!s.trusted[sel])
+    if (need_trusted && !s.trusted[sel])
     {
         out = "该 LuaState 未通过 LuaManager 校验，请进入游戏/关卡后再刷新。";
         return false;
@@ -437,7 +450,7 @@ inline bool exec(ov::Data& d, Session& s, int sel, const char* code, std::string
         return false;
     }
 
-    const std::string src = wrap_code(code);
+    const std::string src = wrap_code(code, guard_hook);
     std::vector<uint16_t> w;
     int wlen = MultiByteToWideChar(CP_UTF8, 0, src.c_str(), (int)src.size(), nullptr, 0);
     if (wlen <= 0) { out = "脚本编码失败"; return false; }
@@ -472,13 +485,13 @@ inline bool exec(ov::Data& d, Session& s, int sel, const char* code, std::string
     if (!d.rd(item, ik)) { out = "(无法读取返回值)"; return false; }
     if (ik == s.str_klass)
     {
-        if (!read_managed_string(d, item, out)) out = "(字符串读取失败)";
+        if (!read_managed_string(d, item, out)) { out = "(字符串读取失败)"; return false; }
     }
     else
     {
         out = "(返回类型: " + d.name_ref(ik) + ")";
     }
-    if (out.size() > 3900) out.resize(3900);
+    if (out_cap && out.size() > out_cap) out.resize(out_cap);
     return true;
 }
 

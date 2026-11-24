@@ -33,6 +33,7 @@
 #include "ui/App.h"
 #include "ui/State.h"
 #include "ui/UiCore.h"
+#include "ui/Glass.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -108,27 +109,8 @@ static std::atomic<bool>        g_god_state{ false };
 
 // MCP lua_eval 执行器：只在游戏主线程被调用，和 UI 共用 g_lua。
 // 逐个校验已信任的 LuaState，选当前真正可用的那个（通常靠后的状态）。
-static const char* kGadgetLua =
-    "luanet.load_assembly('UnityEngine')\n"
-    "local O=luanet.import_type('UnityEngine.Object')\n"
-    "local out={}\n"
-    "local function dump(cls,tag)\n"
-    " local T=luanet.ctype(luanet.import_type(cls))\n"
-    " local a=O.FindObjectsOfType(T)\n"
-    " for i=0,a.Length-1 do\n"
-    "  local c=a:GetValue(i)\n"
-    "  local g=c.gameObject\n"
-    "  local t=g.transform.position\n"
-    "  local guid,ag='0',''\n"
-    "  pcall(function() local cf=c._gadgetActor.GadgetConfig guid=tostring(cf.GUID) ag=tostring(cf.ActionGraphPath) end)\n"
-    "  out[#out+1]=string.format('%s|%s|%.2f|%.2f|%.2f|%s|%s',tag,g.name,t.x,t.y,t.z,guid,ag)\n"
-    " end\n"
-    "end\n"
-    "dump('MoleMole.PJMS.PJMSGadgetEntity','G')\n"
-    "dump('MoleMole.PJMS.PJMSNPCEntity','N')\n"
-    "return table.concat(out,'\\n')\n";
-
-static bool mcp_lua_eval(const std::string& code, std::string& out, std::string& err)
+static bool mcp_lua_eval(const std::string& code, std::string& out, std::string& err,
+                         size_t out_cap = 3900, bool feed = false)
 {
     out.clear();
     err.clear();
@@ -160,7 +142,7 @@ static bool mcp_lua_eval(const std::string& code, std::string& out, std::string&
     int sel = -1;
     for (int i = g_lua.n - 1; i >= 0; --i)
     {
-        if (g_lua.trusted[i] && state_alive(g_lua.states[i])) { sel = i; break; }
+        if ((feed || g_lua.trusted[i]) && state_alive(g_lua.states[i])) { sel = i; break; }
     }
     if (sel < 0)
     {
@@ -168,27 +150,13 @@ static bool mcp_lua_eval(const std::string& code, std::string& out, std::string&
         return false;
     }
 
-    const bool ok = ovlua::exec(g_data, g_lua, sel, code.c_str(), out);
+    const bool ok = ovlua::exec(g_data, g_lua, sel, code.c_str(), out, out_cap, !feed, !feed);
     if (!ok)
     {
         err = out.empty() ? g_lua.msg : out;
         out.clear();
     }
     return ok;
-}
-// 每秒一次：游戏线程里用 Lua 取 PJMS 实体快照，喂给绘制层，不再扫堆。
-static void collect_gadgets_lua()
-{
-    static uint64_t last = 0;
-    const uint64_t now = GetTickCount64();
-    if (now - last < 1000) return;
-    last = now;
-    if (!g_data.ready_ok()) return;
-    if (g_lua.n <= 0 && !g_lua.scanning) ovlua::start_scan(g_data, g_lua);
-    if (g_lua.n <= 0) return;
-    std::string out, err;
-    if (!mcp_lua_eval(kGadgetLua, out, err)) return;
-    ovn::publish_lua_feed(out);
 }
 
 struct GameExchange {
@@ -306,7 +274,6 @@ static void tick_game_thread() {
     if (!sampling_lock.owns_lock()) return;
     // MCP 的函数调用只在游戏主线程执行，避免跨线程调 IL2CPP。
     ovmcp::OnGameThreadTick();
-    collect_gadgets_lua();
     static uint64_t last_init = 0;
     ui::Settings cfg;
     ui::Requests rq;
@@ -592,10 +559,12 @@ static bool init_gui(IDXGISwapChain* sc) {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
-    io.MouseDrawCursor = true;
+    io.MouseDrawCursor = false;
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 
     {
         char err[256] = { 0 };
+        ui::LoadConfig();
         ui::SetUiScale(ui::Cfg().ui_scale);
         ui::BuildFonts(io.Fonts, ui::UiScale(), err, (int)sizeof err);
     }
@@ -1076,7 +1045,7 @@ static void render_overlay(IDXGISwapChain* sc) {
             ImGuiIO& io = ImGui::GetIO();
             const bool vis = ui::AppVisible();
             if (!vis) { io.WantCaptureMouse = false; io.WantCaptureKeyboard = false; }
-            io.MouseDrawCursor = vis;
+            io.MouseDrawCursor = false;
 
             static uint64_t last_tick = 0;
             uint64_t now = GetTickCount64();
@@ -1101,6 +1070,9 @@ static void render_overlay(IDXGISwapChain* sc) {
 
             update_fps();
 
+            // 菜单打开时先铺蓝绿渐变背景，ESP / 寻路线仍绘制在其上方。
+            if (vis) ui::glass::Backdrop(ImGui::GetBackgroundDrawList(), io.DisplaySize,
+                                         ui::Cfg().backdrop_alpha, (float)ImGui::GetTime());
             draw_esp(dt);
             draw_nav();
             if (vis) ui::AppFrame(dt);

@@ -1,4 +1,5 @@
 #include "UiCore.h"
+#include "Glass.h"
 #include "imgui_internal.h"
 #include "_icon_data.h"
 #include "_ranges.inc"
@@ -264,13 +265,13 @@ void ApplyTheme(float scale)
     if (scale > 2.5f) scale = 2.5f;
 
     st.WindowPadding            = ImVec2(0, 0);
-    st.FramePadding             = ImVec2(6 * scale, 3 * scale);
-    st.ItemSpacing              = ImVec2(0, 10 * scale);
-    st.ItemInnerSpacing         = ImVec2(10 * scale, 0);
-    st.CellPadding              = ImVec2(6 * scale, 3 * scale);
-    st.IndentSpacing            = 20.0f * scale;
-    st.ScrollbarSize            = 2.0f * scale;
-    st.GrabMinSize              = 10.0f * scale;
+    st.FramePadding             = ImVec2(10 * scale, 6 * scale);
+    st.ItemSpacing              = ImVec2(0, 12 * scale);
+    st.ItemInnerSpacing         = ImVec2(12 * scale, 0);
+    st.CellPadding              = ImVec2(8 * scale, 5 * scale);
+    st.IndentSpacing            = 22.0f * scale;
+    st.ScrollbarSize            = 5.0f * scale;
+    st.GrabMinSize              = 14.0f * scale;
 
     st.WindowBorderSize         = 0.0f;
     st.ChildBorderSize          = 1.0f * scale;
@@ -278,13 +279,13 @@ void ApplyTheme(float scale)
     st.FrameBorderSize          = 0.0f;
     st.TabBorderSize            = 0.0f;
 
-    st.WindowRounding           = 8.0f * scale;
-    st.ChildRounding            = 7.0f * scale;
-    st.FrameRounding            = 4.0f * scale;
-    st.PopupRounding            = 5.0f * scale;
-    st.ScrollbarRounding        = 2.0f * scale;
-    st.GrabRounding             = 4.0f * scale;
-    st.TabRounding              = 3.0f * scale;
+    st.WindowRounding           = 18.0f * scale;
+    st.ChildRounding            = 12.0f * scale;
+    st.FrameRounding            = 8.0f * scale;
+    st.PopupRounding            = 12.0f * scale;
+    st.ScrollbarRounding        = 8.0f * scale;
+    st.GrabRounding             = 8.0f * scale;
+    st.TabRounding              = 8.0f * scale;
 
     st.WindowTitleAlign         = ImVec2(0.0f, 0.5f);
     st.WindowMenuButtonPosition = ImGuiDir_None;
@@ -295,62 +296,7 @@ void ApplyTheme(float scale)
     st.AntiAliasedFill          = true;
     st.CurveTessellationTol     = 1.25f;
 
-    ImVec4* c = st.Colors;
-    const ImVec4 accent     = C(theme::Accent);
-    const ImVec4 accentSoft = C(theme::AccentSoft);
-    c[ImGuiCol_Text]                  = C(theme::TextHi);
-    c[ImGuiCol_TextDisabled]          = C(theme::TextLow);
-    c[ImGuiCol_WindowBg]              = C(theme::WinBg, theme::WinAlpha);
-    c[ImGuiCol_ChildBg]               = C(theme::CardBg, theme::CardAlpha);
-    c[ImGuiCol_PopupBg]               = C(theme::WinBg, 0.97f);
-    c[ImGuiCol_Border]                = C(theme::Border, theme::BorderAlpha);
-    c[ImGuiCol_BorderShadow]          = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_FrameBg]               = C(theme::PanelBg, 0.92f);
-    c[ImGuiCol_FrameBgHovered]        = C(theme::CardHover, 0.96f);
-    c[ImGuiCol_FrameBgActive]         = C(theme::CardBg, 1.0f);
-    c[ImGuiCol_TitleBg]               = C(theme::WinBg, 1.0f);
-    c[ImGuiCol_TitleBgActive]         = C(theme::WinBg, 1.0f);
-    c[ImGuiCol_TitleBgCollapsed]      = C(theme::WinBg, 1.0f);
-    c[ImGuiCol_MenuBarBg]             = C(theme::PanelBg, 1.0f);
-    c[ImGuiCol_ScrollbarBg]           = C(theme::PanelBg, 1.0f);
-    c[ImGuiCol_ScrollbarGrab]         = C(theme::Border, 0.95f);
-    c[ImGuiCol_ScrollbarGrabHovered]  = C(theme::CardHover, 1.0f);
-    c[ImGuiCol_ScrollbarGrabActive]   = accent;
-    c[ImGuiCol_CheckMark]             = accent;
-    c[ImGuiCol_SliderGrab]            = accent;
-    c[ImGuiCol_SliderGrabActive]      = accentSoft;
-    c[ImGuiCol_Button]                = C(theme::CardBg, 0.92f);
-    c[ImGuiCol_ButtonHovered]         = C(theme::CardHover, 1.0f);
-    c[ImGuiCol_ButtonActive]          = accent;
-    c[ImGuiCol_Header]                = C(theme::Border, 0.45f);
-    c[ImGuiCol_HeaderHovered]         = C(theme::CardHover, 1.0f);
-    c[ImGuiCol_HeaderActive]          = accent;
-    c[ImGuiCol_Separator]             = C(theme::Border, 0.55f);
-    c[ImGuiCol_SeparatorHovered]      = accentSoft;
-    c[ImGuiCol_SeparatorActive]       = accent;
-    c[ImGuiCol_ResizeGrip]            = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_ResizeGripHovered]     = C(theme::Accent, 0.60f);
-    c[ImGuiCol_ResizeGripActive]      = accent;
-    c[ImGuiCol_Tab]                   = C(theme::Border, 0.45f);
-    c[ImGuiCol_TabHovered]            = C(theme::CardHover, 1.0f);
-    c[ImGuiCol_TabActive]             = accent;
-    c[ImGuiCol_TabUnfocused]          = C(theme::Border, 0.35f);
-    c[ImGuiCol_TabUnfocusedActive]    = C(theme::Accent, 0.70f);
-    c[ImGuiCol_PlotLines]             = C(theme::Cyan);
-    c[ImGuiCol_PlotLinesHovered]      = C(theme::Cyan, 0.85f);
-    c[ImGuiCol_PlotHistogram]         = accent;
-    c[ImGuiCol_PlotHistogramHovered]  = accentSoft;
-    c[ImGuiCol_TableHeaderBg]         = C(theme::PanelBg, 1.0f);
-    c[ImGuiCol_TableBorderStrong]     = C(theme::Border, 0.7f);
-    c[ImGuiCol_TableBorderLight]      = C(theme::Border, 0.4f);
-    c[ImGuiCol_TableRowBg]            = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_TableRowBgAlt]         = C(theme::TextHi, 0.04f);
-    c[ImGuiCol_TextSelectedBg]        = C(theme::Accent, 0.38f);
-    c[ImGuiCol_DragDropTarget]        = C(theme::Cyan);
-    c[ImGuiCol_NavHighlight]          = accentSoft;
-    c[ImGuiCol_NavWindowingHighlight] = ImVec4(1, 1, 1, 0.70f);
-    c[ImGuiCol_NavWindowingDimBg]     = ImVec4(0, 0, 0, 0.20f);
-    c[ImGuiCol_ModalWindowDimBg]      = ImVec4(0, 0, 0, 0.45f);
+    glass::ApplyPaletteColors(glass::CurrentTheme());
 
     st.WindowPadding = ImVec2(0, 0);
 }

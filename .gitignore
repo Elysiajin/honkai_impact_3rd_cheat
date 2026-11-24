@@ -1,5 +1,7 @@
 # 大体积生成物
 sdk/bh3_dump.cs
+sdk/bh3_dump_full.cs
+sdk/bh3_methods_full.tsv
 sdk/bh3_fields.tsv
 sdk/bh3_methods_named.tsv
 sdk/bh3_methods_scan.tsv
@@ -30,6 +32,9 @@ overlay/*.o
 
 # MCP 运行时数据
 mcp_file/
+
+# overlay 运行时配置（随 DLL 目录生成）
+overlay/bh3_overlay.json
 
 # 本地工具缓存
 .workbuddy/

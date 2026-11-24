@@ -1129,8 +1129,8 @@ bool ImGui::ButtonEx(const char* label, const ImVec2& size_arg, ImGuiButtonFlags
 
     it_anim->second.text_alpha = ImClamp(it_anim->second.text_alpha + (4.f * g.IO.DeltaTime * (it_anim->second.active ? 1.f : -1.f)), 0.3f, 1.f);
     it_anim->second.rect_alpha = ImClamp(it_anim->second.rect_alpha + (5.f * g.IO.DeltaTime * (it_anim->second.active ? 1.f : -1.f)), 0.0f, 1.f);
-    it_anim->second.bg = ImLerp(it_anim->second.bg, it_anim->second.active ? ImColor(c::accent_color) : hovered ? ImColor(24,24,26) : ImColor(24, 24, 26), g.IO.DeltaTime * 5.f);
-    it_anim->second.text = ImLerp(it_anim->second.text, it_anim->second.active ? ImColor(255, 255, 255) : hovered ? ImColor(150, 150, 150) : ImColor(80, 80, 80), g.IO.DeltaTime * 4.f);
+    it_anim->second.bg = ImLerp(it_anim->second.bg, it_anim->second.active ? ImColor(c::button_push_gradient_active) : hovered ? ImColor(c::button_push_gradient_hovered) : ImColor(c::button), g.IO.DeltaTime * 5.f);
+    it_anim->second.text = ImLerp(it_anim->second.text, it_anim->second.active ? ImColor(c::text_active) : hovered ? ImColor(c::text_hov) : ImColor(c::text), g.IO.DeltaTime * 4.f);
 
     if (it_anim->second.rect_alpha >= 0.9f)
         it_anim->second.active = false;

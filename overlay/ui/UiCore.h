@@ -35,31 +35,31 @@ inline ImVec4 Mix(const ImVec4& a, const ImVec4& b, float t)
                   a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
 }
 
-// 统一主题 Token：深蓝紫玻璃 + 雾紫主强调 + 冰蓝辅助。
-// 颜色集中在此，避免散落在各绘制函数；alpha 按无实时模糊的伪磨砂设定。
+// 统一主题 Token：默认值对应参考项目「瓷白」，切换主题时由 Glass.h 原地改写。
+// 大块底板由 Glass.h 的材质绘制，这里的 alpha 只兜底 ImGui 原生控件。
 namespace theme
 {
-    inline constexpr unsigned Accent     = 0xA970FFu; // 雾紫，主强调
-    inline constexpr unsigned AccentSoft = 0xD4B8FFu; // 弱强调/高光
-    inline constexpr unsigned Cyan       = 0x6FD8F0u; // 冰蓝，辅助点缀
-    inline constexpr unsigned TextHi     = 0xF2EEFFu;
-    inline constexpr unsigned TextMid    = 0xB0ABC4u;
-    inline constexpr unsigned TextLow    = 0x858098u;
-    inline constexpr unsigned Success    = 0x76D6B0u;
-    inline constexpr unsigned Warning    = 0xF0B66Eu;
-    inline constexpr unsigned Danger     = 0xF07891u;
-    inline constexpr unsigned WinBg      = 0x111326u;
-    inline constexpr unsigned PanelBg    = 0x191B34u;
-    inline constexpr unsigned CardBg     = 0x242540u;
-    inline constexpr unsigned CardHover  = 0x2D2B4Bu;
-    inline constexpr unsigned Border     = 0x3B3652u;
+    inline unsigned Accent     = 0x3C5063u;
+    inline unsigned AccentSoft = 0x7593A9u;
+    inline unsigned Cyan       = 0x4E93B8u;
+    inline unsigned TextHi     = 0x1D252Du;
+    inline unsigned TextMid    = 0x3C4E5Fu;
+    inline unsigned TextLow    = 0x6F8494u;
+    inline unsigned Success    = 0x3F8168u;
+    inline unsigned Warning    = 0x9A7139u;
+    inline unsigned Danger     = 0xA95660u;
+    inline unsigned WinBg      = 0xE9F0F7u;
+    inline unsigned PanelBg    = 0xF1F6FBu;
+    inline unsigned CardBg     = 0xFFFFFFu;
+    inline unsigned CardHover  = 0xF7FAFDu;
+    inline unsigned Border     = 0xD6E0EAu;
 
-    inline constexpr float WinAlpha    = 0.92f;
-    inline constexpr float PanelAlpha  = 0.94f;
-    inline constexpr float CardAlpha   = 0.90f;
-    inline constexpr float HoverAlpha  = 0.96f;
-    inline constexpr float BorderAlpha = 0.30f;
-    inline constexpr float EdgeAlpha   = 0.60f;
+    inline float WinAlpha    = 0.30f;
+    inline float PanelAlpha  = 0.34f;
+    inline float CardAlpha   = 0.26f;
+    inline float HoverAlpha  = 0.38f;
+    inline float BorderAlpha = 0.55f;
+    inline float EdgeAlpha   = 0.85f;
 }
 
 inline ImVec4 C(unsigned hex, float a = 1.0f) { return Hex(hex, a); }
