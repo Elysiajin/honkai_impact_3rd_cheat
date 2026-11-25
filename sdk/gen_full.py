@@ -4,8 +4,10 @@ import os
 import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DLL = r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game\BH3_Data\Native\UserAssembly.dll"
-META = r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game\BH3_Data\Managed\Metadata\global-metadata.dat"
+_GAME = os.environ.get("BH3_GAME_DIR",
+                       r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game")
+DLL = os.environ.get("BH3_UA", os.path.join(_GAME, "BH3_Data", "Native", "UserAssembly.dll"))
+META = os.environ.get("BH3_META", os.path.join(_GAME, "BH3_Data", "Managed", "Metadata", "global-metadata.dat"))
 POOL = os.path.join(ROOT, "mcp_file", "pool")
 REFLECT = os.path.join(ROOT, "mcp_file", "reflect.tsv")
 OUT_TSV = os.path.join(ROOT, "sdk", "bh3_methods_full.tsv")

@@ -43,4 +43,8 @@ const char* diag_text();
 // 一行调试摘要：请求数/消费数/耗时/符号 RVA/阶段码，用于确认链路是否打通
 void debug_info(char* out, int cap);
 
+// 实体绘制序号：每帧按距玩家距离升序统一编号，ESP 画面标签与寻路列表共用。
+// 入参是 ovnavui::Item::p（实体地址）；返回 0 表示未编号（如队友、无效实体）。
+int rank_of(uintptr_t p);
+
 } // namespace ovnavui

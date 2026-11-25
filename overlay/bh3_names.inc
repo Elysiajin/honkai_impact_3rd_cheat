@@ -40,6 +40,10 @@ static const GenName kGenNames[SymCount] =
     { "MonoFukaND_BattleY", 0x0600ABD5u, 0x0u },
     { "MonoFukaNL", 0x0600ABD8u, 0x0u },
     { "MonoFukaNL_BattleY", 0x0600ABDBu, 0x0u },
+    { "BaseMonoEntity", 0x0600B115u, 0x0u },
+    { "AvatarManager", 0x0600FB1Fu, 0x0u },
+    { "", 0x00000000u, 0x0u },
+    { "SingletonManager", 0x0603320Cu, 0x0u },
     { "", 0x00000000u, 0x0u },
     { "", 0x00000000u, 0x0u },
     { "", 0x00000000u, 0x0u },
@@ -51,6 +55,6 @@ static const GenName kGenNames[SymCount] =
     { "", 0x00000000u, 0x0u },
 };
 
-constexpr int kNameCount = 29;
+constexpr int kNameCount = 32;
 
 } // namespace ovp

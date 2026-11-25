@@ -80,6 +80,14 @@ struct Status
     int      monster_n    = 0;
     int      gadget_n     = 0;
     int      npc_n        = 0;
+    int      gadget_list_n = 0;
+    int      gadget_cap_n  = 0;
+    int      gadget_read_n = 0;
+    int      gadget_drop_inst = 0;
+    int      gadget_drop_cls  = 0;
+    int      gadget_drop_cfg  = 0;
+    int      gadget_drop_coord = 0;
+    int      gadget_fail = 0;
 
     bool     cam_ok       = false;
     uintptr_t camera      = 0;

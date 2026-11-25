@@ -32,6 +32,14 @@ struct State {
     std::vector<Ent> gadgets, npcs, props;
     uintptr_t gadget_mgr = 0;
     uint64_t gadget_t = 0;
+    int gadget_list_n = 0;
+    int gadget_cap_n = 0;
+    int gadget_read_n = 0;
+    int gadget_drop_inst = 0;
+    int gadget_drop_cls = 0;
+    int gadget_drop_cfg = 0;
+    int gadget_drop_coord = 0;
+    int gadget_fail = 0;
     float player_pos[3] = { 0, 0, 0 };
     bool player_ok = false;
     uint64_t player_t = 0;
@@ -64,15 +72,25 @@ inline uintptr_t mgr_from(ov::Data& d, uint32_t g_rva, uintptr_t want_klass) {
     return m;
 }
 
-inline bool read_list(ov::Data& d, uintptr_t list, std::vector<uintptr_t>& out, size_t cap = 1024) {
+// 容量以数组 length 为准；硬上限只挡野数据
+inline constexpr uintptr_t kListHardCeiling = 1u << 20;
+
+inline bool read_list(ov::Data& d, uintptr_t list, std::vector<uintptr_t>& out,
+                      size_t* out_size = nullptr, size_t* out_length = nullptr)
+{
     out.clear();
+    if (out_size) *out_size = 0;
+    if (out_length) *out_length = 0;
     if (!list) return false;
     uintptr_t items = 0;
     int32_t size = 0;
     if (!d.rd(list + 0x10, items) || !d.rd(list + 0x18, size)) return false;
-    if (!items || size < 0 || size > (int32_t)cap) return false;
+    if (!items || size < 0) return false;
     uintptr_t length = 0;
     if (!d.rd(items + 0x18, length) || length < (uintptr_t)size) return false;
+    if (out_size) *out_size = (size_t)size;
+    if (out_length) *out_length = (size_t)length;
+    if (length > kListHardCeiling) return false;  // 野数据：宁可失败也不遍历几十亿次
     if (out.capacity() < (size_t)size) out.reserve((size_t)size);
     for (int32_t i = 0; i < size; ++i) {
         uintptr_t p = 0;
@@ -269,15 +287,56 @@ inline bool classify_gadget(const char* graph, int& cat, std::string& label)
     return true;
 }
 
-// SingletonManager 的注册表：SingletonManager.GetSingletonInstance 用的
-// Dictionary<string, object>，key 是 "MoleMole.*" 全类型名。
-// [UA+0x2555EB0] -> host，host+0x3A3D0 -> Dictionary。
+struct RegLayout {
+    uint32_t host_rva = 0;
+    uint32_t dict_off = 0;
+};
+
+inline bool resolve_reg_layout(ov::Data& d, RegLayout& out)
+{
+    const uint32_t rv = ovp::Rva(ovp::SymGetSingletonImpl);
+    if (!rv) return false;
+    const uintptr_t fn = d.ua + rv;
+    uint8_t b[96] = {};
+    if (!d.readable(fn, sizeof b) || !ovp::ReadBytes(fn, b, sizeof b)) return false;
+    for (size_t i = 0; i + 9 < sizeof b; ++i)
+    {
+        if (b[i] != 0x48 || b[i + 1] != 0x8B || b[i + 2] != 0x05) continue;
+        const int32_t disp = (int32_t)(b[i + 3] | (b[i + 4] << 8) |
+                                       (b[i + 5] << 16) | ((uint32_t)b[i + 6] << 24));
+        const uint64_t next = (uint64_t)rv + i + 7;
+        const uint64_t target = next + (int64_t)disp;
+        if (target < 0x1000 || target > 0x1284B000ULL) continue;
+        const size_t j = i + 7;
+        if (j + 7 >= sizeof b || b[j] != 0x48 || b[j + 1] != 0x8B) continue;
+        if ((b[j + 2] & 0xC7) != 0x80) continue;
+        const int32_t off = (int32_t)(b[j + 3] | (b[j + 4] << 8) |
+                                      (b[j + 5] << 16) | ((uint32_t)b[j + 6] << 24));
+        if (off == 0x3A3D0)
+        {
+            out.host_rva = (uint32_t)target;
+            out.dict_off = (uint32_t)off;
+            return true;
+        }
+    }
+    return false;
+}
+
 inline uintptr_t registry_instance(ov::Data& d, const char* want)
 {
     if (!d.ready_ok() || !want) return 0;
+    static RegLayout layout = { 0x2555EB0u, 0x3A3D0u };
+    static uint64_t last_t = 0;
+    const uint64_t now = GetTickCount64();
+    if (now - last_t >= 1000)
+    {
+        RegLayout fresh;
+        if (resolve_reg_layout(d, fresh)) layout = fresh;
+        last_t = now;
+    }
     uintptr_t host = 0, dict = 0;
-    if (!d.rd(d.ua + 0x2555EB0, host) || !host) return 0;
-    if (!d.rd(host + 0x3A3D0, dict) || !dict) return 0;
+    if (!d.rd(d.ua + layout.host_rva, host) || !host) return 0;
+    if (!d.rd(host + layout.dict_off, dict) || !dict) return 0;
     uintptr_t k = 0;
     if (!d.rd(dict, k) || !k) return 0;
     char cn[64] = {};
@@ -314,20 +373,32 @@ inline uintptr_t registry_instance(ov::Data& d, const char* want)
 // actor +0x98/0x9C/0xA0 为坐标；+0xD8 是 PJMSGadgetConfig，+0x20 是 ActionGraphPath。
 inline void refresh_gadget_mgr(ov::Data& d, State& s)
 {
-    if (!d.ready_ok()) { s.gadget_mgr = 0; return; }
+    s.gadget_list_n = s.gadget_cap_n = s.gadget_read_n = 0;
+    s.gadget_drop_inst = s.gadget_drop_cls = s.gadget_drop_cfg = s.gadget_drop_coord = 0;
+    s.gadget_fail = 0;
+
+    if (!d.ready_ok()) { s.gadget_mgr = 0; s.gadget_fail = 1; return; }
     if (s.t - s.gadget_t >= 1000) {
         s.gadget_mgr = registry_instance(d, "MoleMole.PJMS.PJMSGadgetManager");
         s.gadget_t = s.t;
     }
-    if (!s.gadget_mgr) return;
+    if (!s.gadget_mgr) { s.gadget_fail = 1; s.gadgets.clear(); return; }
     uintptr_t list = 0;
     std::vector<uintptr_t> ps;
-    if (!d.rd(s.gadget_mgr + 0x38, list) || !list || !read_list(d, list, ps, 512)) {
+    size_t lsize = 0, llen = 0;
+    if (!d.rd(s.gadget_mgr + 0x38, list) || !list ||
+        !read_list(d, list, ps, &lsize, &llen)) {
         // 场景切换后实例失效：清空并等下一次注册表查找。
         s.gadget_mgr = 0;
         s.gadgets.clear();
+        s.gadget_list_n = (int)lsize;
+        s.gadget_cap_n = (int)llen;
+        s.gadget_fail = (llen > kListHardCeiling) ? 3 : 2;
         return;
     }
+    s.gadget_list_n = (int)lsize;
+    s.gadget_cap_n = (int)llen;
+    s.gadget_read_n = (int)ps.size();
     std::vector<Ent> gs;
     gs.reserve(ps.size());
     // 配置/分类只随 actor 变化，缓存，避免每帧逐字符读字符串拖帧。
@@ -335,6 +406,7 @@ inline void refresh_gadget_mgr(ov::Data& d, State& s)
         uintptr_t cfg = 0;
         bool draw = false;
         int cat = 6;
+        int drop = 0;
         std::string name, label;
     };
     static std::unordered_map<uintptr_t, GInfo> info_cache;
@@ -345,17 +417,18 @@ inline void refresh_gadget_mgr(ov::Data& d, State& s)
     }
     for (uintptr_t p : ps) {
         uintptr_t k = 0;
-        if (!d.rd(p, k) || !k) continue;
+        if (!d.rd(p, k) || !k) { ++s.gadget_drop_inst; continue; }
         // 未实例化/已卸载的 actor（LOD、占位）没有实体，旧 Lua 的 FindObjectsOfType 也看不到。
         uintptr_t ent = 0, native = 0;
-        if (!d.rd(p + 0x28, ent) || !ent) continue;
-        if (!d.rd(ent + 0x10, native) || !native) continue;
+        if (!d.rd(p + 0x28, ent) || !ent) { ++s.gadget_drop_inst; continue; }
+        if (!d.rd(ent + 0x10, native) || !native) { ++s.gadget_drop_inst; continue; }
         uintptr_t cfg = 0;
         if (!d.rd(p + 0xD8, cfg)) cfg = 0;
         auto it = info_cache.find(p);
         if (it == info_cache.end() || it->second.cfg != cfg) {
             GInfo gi;
             gi.cfg = cfg;
+            gi.drop = 1;  // 默认：类名/配置不符
             char cls[96] = {};
             if (cfg && d.copy_name(k, cls, sizeof cls) && std::strstr(cls, "PJMSGadgetActor")) {
                 char pn[96] = {}, lt[96] = {}, ag[128] = {};
@@ -368,10 +441,13 @@ inline void refresh_gadget_mgr(ov::Data& d, State& s)
                                  (has_lt && std::strstr(lt, "Empty")) ||
                                  (has_ag && std::strstr(ag, "Empty")) ||
                                  (has_ag && std::strstr(ag, "Listener"));
-                if (!bad) {
+                if (bad) {
+                    gi.drop = 2;
+                } else {
                     gi.name = has_pn ? pn : cls;
                     if (has_ag) {
                         gi.draw = classify_gadget(ag, gi.cat, gi.label);
+                        if (!gi.draw) gi.drop = 3;  // ActionGraphPath 判为 Empty
                     } else {
                         gi.cat = 6;
                         gi.label = "交互物";
@@ -382,15 +458,25 @@ inline void refresh_gadget_mgr(ov::Data& d, State& s)
             if (it == info_cache.end()) it = info_cache.emplace(p, std::move(gi)).first;
             else it->second = std::move(gi);
         }
-        if (!it->second.draw) continue;
+        if (!it->second.draw) {
+            if (it->second.drop == 1) ++s.gadget_drop_cls;
+            else ++s.gadget_drop_cfg;  // 2=Empty/Listener，3=AG 分类 Empty
+            continue;
+        }
         Ent e;
         e.p = p;
         e.name = it->second.name;
         e.cat = it->second.cat;
         e.label = it->second.label;
-        if (!d.rd(p + 0x98, e.x) || !d.rd(p + 0x9C, e.y) || !d.rd(p + 0xA0, e.z)) continue;
-        if (!std::isfinite(e.x) || !std::isfinite(e.y) || !std::isfinite(e.z)) continue;
-        if (std::fabs(e.x) > 1e5f || std::fabs(e.y) > 1e5f || std::fabs(e.z) > 1e5f) continue;
+        if (!d.rd(p + 0x98, e.x) || !d.rd(p + 0x9C, e.y) || !d.rd(p + 0xA0, e.z)) {
+            ++s.gadget_drop_coord; continue;
+        }
+        if (!std::isfinite(e.x) || !std::isfinite(e.y) || !std::isfinite(e.z)) {
+            ++s.gadget_drop_coord; continue;
+        }
+        if (std::fabs(e.x) > 1e5f || std::fabs(e.y) > 1e5f || std::fabs(e.z) > 1e5f) {
+            ++s.gadget_drop_coord; continue;
+        }
         gs.push_back(std::move(e));
     }
     s.gadgets.swap(gs);
@@ -404,30 +490,24 @@ inline void refresh_player_pos(ov::Data& d, State& s) {
     }
     if (s.player_t && s.t - s.player_t < 100) return;
     s.player_t = s.t;
-    struct Sig { unsigned char b[8]; } sig{};
-    if (!d.rd(d.ua + 0x79C36F0, sig)) return;
-    if (!(sig.b[0] == 0x56 && sig.b[1] == 0x48 && sig.b[2] == 0x83 && sig.b[3] == 0xEC &&
-          sig.b[4] == 0x30 && sig.b[5] == 0x48 && sig.b[6] == 0x89 && sig.b[7] == 0xCE)) return;
+    const uint32_t rv_pos = ovp::Rva(ovp::SymRootNodePosition);
+    if (!rv_pos) return;
     typedef void (*GetPosFn)(void*, void*, void*);
-    if (s.avatar_mgr) {
-        struct SigL { unsigned char b[8]; } sigl{};
-        if (d.rd(d.ua + 0x43E2DE0, sigl) &&
-            sigl.b[0] == 0x56 && sigl.b[1] == 0x48 && sigl.b[2] == 0x83 && sigl.b[3] == 0xEC &&
-            sigl.b[4] == 0x20 && sigl.b[5] == 0x48 && sigl.b[6] == 0x89 && sigl.b[7] == 0xCE) {
-            typedef void* (*GetLocalFn)(void*, void*);
-            uintptr_t local = (uintptr_t)((GetLocalFn)(d.ua + 0x43E2DE0))((void*)s.avatar_mgr, nullptr);
-            uintptr_t lk = 0;
-            if (local && d.rd(local, lk) && lk) {
-                char lname[128] = {};
-                if (d.copy_name(lk, lname, sizeof lname) && std::strstr(lname, "Avatar")) {
-                    float p[3] = {};
-                    ((GetPosFn)(d.ua + 0x79C36F0))((void*)p, (void*)local, nullptr);
-                    if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) &&
-                        std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) > 0.01f) {
-                        memcpy(s.player_pos, p, sizeof p);
-                        s.player_ok = true;
-                        return;
-                    }
+    const uint32_t rv_local = ovp::Rva(ovp::SymGetLocalAvatar);
+    if (s.avatar_mgr && rv_local) {
+        typedef void* (*GetLocalFn)(void*, void*);
+        uintptr_t local = (uintptr_t)((GetLocalFn)(d.ua + rv_local))((void*)s.avatar_mgr, nullptr);
+        uintptr_t lk = 0;
+        if (local && d.rd(local, lk) && lk) {
+            char lname[128] = {};
+            if (d.copy_name(lk, lname, sizeof lname) && std::strstr(lname, "Avatar")) {
+                float p[3] = {};
+                ((GetPosFn)(d.ua + rv_pos))((void*)p, (void*)local, nullptr);
+                if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) &&
+                    std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) > 0.01f) {
+                    memcpy(s.player_pos, p, sizeof p);
+                    s.player_ok = true;
+                    return;
                 }
             }
         }
@@ -445,7 +525,7 @@ inline void refresh_player_pos(ov::Data& d, State& s) {
     float best_d2 = 0.0f;
     for (const Ent& a : s.avatars) {
         float p[3] = {};
-        ((GetPosFn)(d.ua + 0x79C36F0))((void*)p, (void*)a.p, nullptr);
+        ((GetPosFn)(d.ua + rv_pos))((void*)p, (void*)a.p, nullptr);
         if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) continue;
         if (std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) < 0.01f) continue;
         if (std::fabs(p[0]) > 1e5f || std::fabs(p[1]) > 1e5f || std::fabs(p[2]) > 1e5f) continue;
@@ -495,12 +575,10 @@ inline void request_teleport(float x, float y, float z) {
 // 关卡里 avatar 列表可能有多个（队伍/替身），拿 list[0] 会传到没加载的实体上。
 inline uintptr_t local_avatar_ptr(ov::Data& d, State& s) {
     if (!d.ua || !s.avatar_mgr) return 0;
-    struct SigL { unsigned char b[8]; } sigl{};
-    if (!d.rd(d.ua + 0x43E2DE0, sigl)) return 0;
-    if (!(sigl.b[0] == 0x56 && sigl.b[1] == 0x48 && sigl.b[2] == 0x83 && sigl.b[3] == 0xEC &&
-          sigl.b[4] == 0x20 && sigl.b[5] == 0x48 && sigl.b[6] == 0x89 && sigl.b[7] == 0xCE)) return 0;
+    const uint32_t rv = ovp::Rva(ovp::SymGetLocalAvatar);
+    if (!rv) return 0;
     typedef void* (*GetLocalFn)(void*, void*);
-    uintptr_t a = (uintptr_t)((GetLocalFn)(d.ua + 0x43E2DE0))((void*)s.avatar_mgr, nullptr);
+    uintptr_t a = (uintptr_t)((GetLocalFn)(d.ua + rv))((void*)s.avatar_mgr, nullptr);
     uintptr_t k = 0;
     char name[128] = {};
     if (!a || !d.rd(a, k) || !k || !d.copy_name(k, name, sizeof name)) return 0;
@@ -520,20 +598,15 @@ inline void do_teleport(ov::Data& d, State& s) {
         lstrcpynA(tp_msg(), "没有角色实例", 96);
         return;
     }
-    struct Sig { unsigned char b[8]; } sig{};
-    if (!d.rd(d.ua + 0x995EC20, sig)) {
-        lstrcpynA(tp_msg(), "读函数前导失败", 96);
-        return;
-    }
-    if (!(sig.b[0] == 0x56 && sig.b[1] == 0x57 && sig.b[2] == 0x53 && sig.b[3] == 0x48 &&
-          sig.b[4] == 0x83 && sig.b[5] == 0xEC && sig.b[6] == 0x50 && sig.b[7] == 0x48)) {
-        lstrcpynA(tp_msg(), "函数签名不匹配（版本不符）", 96);
+    const uint32_t rv = ovp::Rva(ovp::SymTeleportTo);
+    if (!rv) {
+        lstrcpynA(tp_msg(), "传送符号未解析", 96);
         return;
     }
     typedef void (*TpFn)(void*, void*, void*);
     const float* t = tp_pos();
     float pos[3] = { t[0], t[1] + 0.5f, t[2] };
-    ((TpFn)(d.ua + 0x995EC20))((void*)avatar, (void*)pos, nullptr);
+    ((TpFn)(d.ua + rv))((void*)avatar, (void*)pos, nullptr);
     lstrcpynA(tp_msg(), "已传送到目标", 96);
 }
 

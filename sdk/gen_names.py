@@ -26,6 +26,10 @@ SYMBOLS = {
     # CalculatePath/SamplePosition 各 2 重载 → token 不唯一，先留空（无 live fallback，
     # 仅静态 RVA 生效），triangulation 唯一可给。
     "navmesh_calculate_triangulation": ("NavMesh", "CalculateTriangulation"),
+    "root_node_position": ("BaseMonoEntity", "get_RootNodePosition"),
+    "get_local_avatar": ("AvatarManager", "GetLocalAvatar"),
+    "teleport_to": ("BaseMonoAnimatorEntity", "TeleportTo"),
+    "get_singleton_impl": ("SingletonManager", "GetSingletonInstance"),
 }
 
 ULTRA = [
@@ -38,15 +42,21 @@ ULTRA = [
 ]
 
 
-def load_tokens(path):
+def load_tokens(path, extra=None):
     out = {}
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for row in csv.DictReader(f, delimiter="\t"):
-            rva = int(row["rva"], 0)
-            tok = int(row["token"], 0)
-            if not rva or not tok:
-                continue
-            out.setdefault((row["class"], row["method"]), set()).add(tok)
+    for p in (path, extra):
+        if not p or not os.path.exists(p):
+            continue
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                rva = int(row["rva"], 0)
+                tok = int(row["token"], 0)
+                if not rva or not tok:
+                    continue
+                cls = row["class"]
+                if "." in cls:
+                    cls = cls.rsplit(".", 1)[-1]
+                out.setdefault((cls, row["method"]), set()).add(tok)
     return out
 
 
@@ -67,7 +77,8 @@ def parse_profile(path):
 
 
 def main():
-    tokens = load_tokens(os.path.join(HERE, "bh3_methods_named.tsv"))
+    tokens = load_tokens(os.path.join(HERE, "bh3_methods_named.tsv"),
+                         os.path.join(HERE, "bh3_methods_full.tsv"))
     entries = parse_profile(os.path.join(ROOT, "overlay", "bh3_profile.inc"))
 
     rows = []
@@ -92,7 +103,8 @@ def main():
         else:
             missing.append(key)
 
-        if cls and key in SYMBOLS:
+        if cls and key in SYMBOLS and key not in (
+                "root_node_position", "get_local_avatar", "teleport_to", "get_singleton_impl"):
             fname = SYMBOLS[key][1]
             need = None
             for row in csv.DictReader(

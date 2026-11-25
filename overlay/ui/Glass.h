@@ -522,6 +522,11 @@ inline float Hash(float n)
     return v - std::floor(v);
 }
 
+inline float Fract(float v)
+{
+    return v - std::floor(v);
+}
+
 // 源项目「星野」的简化版：固定分布 + 极慢闪烁，圆角内不会溢出。
 inline void Speckles(ImDrawList* d, ImVec2 p, ImVec2 size, float scale,
                      float alpha, float time, int count = 96)
@@ -532,12 +537,15 @@ inline void Speckles(ImDrawList* d, ImVec2 p, ImVec2 size, float scale,
     for (int i = 0; i < count; ++i)
     {
         const float seed = (float)i + 1.0f;
-        const float x = Hash(seed * 2.13f);
-        const float y = Hash(seed * 3.71f);
+        const float one = Hash(seed * 2.13f);
+        const float two = Hash(seed * 3.71f);
         const float depth = 0.35f + 0.65f * Hash(seed * 5.29f);
+        const float x = Fract(one + time * (0.006f + 0.004f * (depth - 0.5f)) +
+                              0.012f * std::sin(time * 0.3f + two * 6.2831853f));
+        const float y = Fract(two + time * (0.016f + 0.030f * depth));
         const ImVec2 point(p.x + x * size.x, p.y + y * size.y);
         const float radius = (0.55f + 0.85f * depth) * scale;
-        const float twinkle = 0.42f + 0.58f * (0.5f + 0.5f * std::sin(time * (0.5f + depth) + x * 17.0f));
+        const float twinkle = 0.42f + 0.58f * (0.5f + 0.5f * std::sin(time * (0.5f + depth) + one * 17.0f));
         d->AddCircleFilled(point, radius,
                            Col(Opacity(pal.accent, alpha * (0.20f + 0.38f * twinkle)), 1.0f), 8);
         if (i % 19 == 0)

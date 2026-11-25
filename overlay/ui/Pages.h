@@ -18,7 +18,6 @@ enum class Page
 };
 
 const char* PageName(Page p);
-const char* PageIcon(Page p);
 
 // 卡片与提示：各页面共用
 bool Card(const char* title, const ImVec2& size);

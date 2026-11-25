@@ -122,7 +122,7 @@ static bool mcp_lua_eval(const std::string& code, std::string& out, std::string&
         err = g_lua.msg;
         return false;
     }
-    if (g_lua.n <= 0)
+    if (g_lua.n <= 0 && !ovlua::find_state_registry(g_data, g_lua))
     {
         err = "没有 LuaState，请先在 Lua 控制台点“刷新状态”";
         return false;
@@ -368,6 +368,14 @@ static void tick_game_thread() {
     st.monster_n = (int)g_game_nv.monsters.size();
     st.gadget_n = (int)g_game_nv.gadgets.size();
     st.npc_n = (int)g_game_nv.npcs.size();
+    st.gadget_list_n = g_game_nv.gadget_list_n;
+    st.gadget_cap_n = g_game_nv.gadget_cap_n;
+    st.gadget_read_n = g_game_nv.gadget_read_n;
+    st.gadget_drop_inst = g_game_nv.gadget_drop_inst;
+    st.gadget_drop_cls = g_game_nv.gadget_drop_cls;
+    st.gadget_drop_cfg = g_game_nv.gadget_drop_cfg;
+    st.gadget_drop_coord = g_game_nv.gadget_drop_coord;
+    st.gadget_fail = g_game_nv.gadget_fail;
     st.cam_ok = g_game_nv.cam_ok;
     st.camera = g_game_nv.camera;
     st.cam_w = g_game_nv.w;
@@ -715,9 +723,13 @@ static void draw_nav() {
 // g_nv（渲染线程持有的完整实体状态）是本文件 static。
 namespace ovnavui {
 
+static void rebuild_ranks(const ovn::State& s, const float* ref);
+
 bool fetch(int cat, Item* out, int cap, int& n) {
     n = 0;
     const ovn::State& s = g_nv;
+    // 列表与画面共用序号表：即使 ESP 关闭也能保证列表里有稳定编号。
+    rebuild_ranks(s, s.player_pos);
     // cat: 0=宝箱/采集(gadgets) 1=晶体采集物(props) 2=NPC 3=怪物
     const std::vector<ovn::Ent>* list = nullptr;
     if (cat == 0) list = &s.gadgets;
@@ -776,6 +788,39 @@ void debug_info(char* out, int cap) {
              ns.sym_ok ? "✓" : "✗",
              ns.player_ok ? "✓" : "✗",
              ns.tri_ok ? "✓" : "✗", ns.tri_v, ns.tri_i / 3, ns.last_ms);
+}
+
+// ---- 统一绘制序号 ----
+// 每帧由 draw_esp 调用 rebuild_ranks：把所有可寻路实体（怪物/宝箱/采集/NPC）
+// 按距玩家距离升序编号，画面 ESP 标签与寻路列表用同一张表，做到 "[n]" 一一对应。
+// 队友不参与编号（列表里没有、也不能寻路）。
+static std::unordered_map<uintptr_t, int> g_draw_rank;
+
+static void rebuild_ranks(const ovn::State& s, const float* ref) {
+    g_draw_rank.clear();
+    if (!(fabsf(ref[0]) + fabsf(ref[1]) + fabsf(ref[2])) > 0.01f) return;
+
+    struct Ranked { uintptr_t p; float d; };
+    std::vector<Ranked> v;
+    auto add = [&](const ovn::Ent& e) {
+        if (!e.p) return;
+        v.push_back({ e.p, dist_between(ref, e.x, e.y, e.z) });
+    };
+    for (const auto& e : s.monsters) add(e);
+    for (const auto& e : s.gadgets)  add(e);
+    for (const auto& e : s.props)    add(e);
+    for (const auto& e : s.npcs)     add(e);
+
+    std::sort(v.begin(), v.end(), [](const Ranked& a, const Ranked& b) {
+        if (a.d != b.d) return a.d < b.d;
+        return a.p < b.p;   // 同距离按地址，保证顺序稳定
+    });
+    for (size_t i = 0; i < v.size(); ++i) g_draw_rank[v[i].p] = (int)i + 1;
+}
+
+int rank_of(uintptr_t p) {
+    auto it = g_draw_rank.find(p);
+    return it == g_draw_rank.end() ? 0 : it->second;
 }
 
 } // namespace ovnavui
@@ -862,6 +907,9 @@ static void draw_esp(float dt) {
         (avatar_pos_ok ? &s.avatars[(size_t)li].x : s.cam_pos);
     const bool ref_ok = (fabsf(ref[0]) + fabsf(ref[1]) + fabsf(ref[2])) > 0.01f;
 
+    // 每帧重建统一序号表：ESP 画面标签与寻路列表共用同一编号。
+    ovnavui::rebuild_ranks(s, ref);
+
     smooth_prune(now);
 
     int drawn = 0;
@@ -894,8 +942,14 @@ static void draw_esp(float dt) {
         if (show_box) draw_box(dl, a, b, col);
         if (show_name) {
             const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
-            if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", nm, dist);
-            else           snprintf(line, sizeof line, "%s", nm);
+            const int rk = ovnavui::rank_of(e.p);
+            if (rk > 0) {
+                if (show_dist) snprintf(line, sizeof line, "[%d] %s %.0fm", rk, nm, dist);
+                else           snprintf(line, sizeof line, "[%d] %s", rk, nm);
+            } else {
+                if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", nm, dist);
+                else           snprintf(line, sizeof line, "%s", nm);
+            }
             const ImVec2 ts = f->CalcTextSizeA(fsz, FLT_MAX, 0.0f, line, nullptr);
             const float tx = (a.x + b.x) * 0.5f - ts.x * 0.5f;
             const float ty = a.y - ts.y - cfg.esp_off;
@@ -960,8 +1014,14 @@ static void draw_esp(float dt) {
             if (show_box) draw_box(dl, a, b, cc);
             if (show_name) {
                 const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
-                if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", nm, dist);
-                else           snprintf(line, sizeof line, "%s", nm);
+                const int rk = ovnavui::rank_of(e.p);
+                if (rk > 0) {
+                    if (show_dist) snprintf(line, sizeof line, "[%d] %s %.0fm", rk, nm, dist);
+                    else           snprintf(line, sizeof line, "[%d] %s", rk, nm);
+                } else {
+                    if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", nm, dist);
+                    else           snprintf(line, sizeof line, "%s", nm);
+                }
                 const ImVec2 ts = f->CalcTextSizeA(fsz, FLT_MAX, 0.0f, line, nullptr);
                 const float tx = (a.x + b.x) * 0.5f - ts.x * 0.5f;
                 const float ty = a.y - ts.y - cfg.esp_off;

@@ -159,12 +159,60 @@ inline bool read_i32_array(ov::Data& d, uintptr_t arr, std::vector<int32_t>& out
 //     网格过期由引擎自己处理；换图后 NavigationSystem 单例本身会换。
 // 以上 RVA 全部 build 专用；入口用 triangulation 符号的 prologue 校验门禁防错配。
 
-// 复刻流程用到的辅助 RVA（build 0x6AA18D63 专用，勿跨版本使用）
+// 复刻流程用到的辅助 RVA：从 triangulation 入口的 rip-relative 指令动态解析。
 namespace navutil {
-    constexpr uint32_t kInitFlagRva   = 0x281333Bu;   // byte，icall 已注册标志
-    constexpr uint32_t kIcallSlotRva  = 0x2554690u;   // qword，icall 函数指针槽
-    constexpr uint32_t kIcallInitRva  = 0x6259E0u;    // fn(ecx=0x5DCB) 注册 icall
+    constexpr uint32_t kInitFlagRva   = 0x281333Bu;   // fallback
+    constexpr uint32_t kIcallSlotRva  = 0x2554690u;
+    constexpr uint32_t kIcallInitRva  = 0x6259E0u;
     constexpr uint32_t kIcallInitId   = 0x5DCBu;
+
+    struct NavLayout {
+        uint32_t init_flag = kInitFlagRva;
+        uint32_t icall_slot = kIcallSlotRva;
+        uint32_t init_fn = kIcallInitRva;
+        uint32_t init_id = kIcallInitId;
+    };
+
+    inline NavLayout& layout() {
+        static NavLayout v;
+        static uint64_t stamp = 0;
+        const uint64_t now = GetTickCount64();
+        if (stamp && now - stamp < 2000) return v;
+        stamp = now;
+        const uint32_t rv = ovp::Rva(ovp::SymNavmeshCalculateTriangulation);
+        if (!rv) return v;
+        uint8_t b[0x120] = {};
+        HMODULE ua = GetModuleHandleW(L"UserAssembly.dll");
+        if (!ua || !ovp::ReadBytes((uintptr_t)ua + rv, b, sizeof b)) return v;
+        auto rip_target = [&](size_t i, size_t len) -> uint64_t {
+            if (i + len > sizeof b) return 0;
+            const int32_t disp = (int32_t)(b[i] | (b[i + 1] << 8) |
+                                           (b[i + 2] << 16) | ((uint32_t)b[i + 3] << 24));
+            return (uint64_t)rv + i + len + (int64_t)disp;
+        };
+        if (b[0] == 0x80 && b[1] == 0x3D && b[7] == 0x74) {
+            uint64_t t = rip_target(2, 4);
+            if (t > 0x1000 && t < 0x1284B000ULL) v.init_flag = (uint32_t)t;
+        }
+        if (b[8] == 0xFF && b[9] == 0x15) {
+            uint64_t t = rip_target(10, 4);
+            if (t > 0x1000 && t < 0x1284B000ULL) v.icall_slot = (uint32_t)t;
+        }
+        for (size_t i = 0; i + 9 < sizeof b; ++i) {
+            if (b[i] != 0xB9 || b[i + 5] != 0xE8) continue;
+            const uint32_t id = (uint32_t)(b[i + 1] | (b[i + 2] << 8) |
+                                           (b[i + 3] << 16) | ((uint32_t)b[i + 4] << 24));
+            const int32_t rel = (int32_t)(b[i + 6] | (b[i + 7] << 8) |
+                                          (b[i + 8] << 16) | ((uint32_t)b[i + 9] << 24));
+            const int64_t target = (int64_t)rv + i + 10 + rel;
+            if (target > 0x1000 && target < 0x1284B000ULL) {
+                v.init_id = id;
+                v.init_fn = (uint32_t)target;
+                break;
+            }
+        }
+        return v;
+    }
 
     inline bool exec_ptr(uintptr_t p) {
         if (p < 0x10000ull) return false;
@@ -235,16 +283,16 @@ inline int32_t fetch_triangulation_ex(ov::Data& d,
     // 否则下面复刻用的硬编码 RVA 也不可信。
     if (!ns.sym_ok || !ns.rva_tri) return kTriSymInvalid;
 
+    const navutil::NavLayout& nav = navutil::layout();
     uint8_t flag = 0;
-    if (!d.rd(d.ua + navutil::kInitFlagRva, flag)) return kTriFlagUnread;
+    if (!d.rd(d.ua + nav.init_flag, flag)) return kTriFlagUnread;
     if (!flag) {
-        // 注册 icall（与 0x1256d330 mov ecx,0x5dcb; call 0x6259e0 一致）
         typedef void (*InitFn)(int);
-        ((InitFn)(d.ua + navutil::kIcallInitRva))(navutil::kIcallInitId);
+        ((InitFn)(d.ua + nav.init_fn))(nav.init_id);
     }
 
     uintptr_t icall = 0;
-    if (!d.rd(d.ua + navutil::kIcallSlotRva, icall) || !icall) return kTriSlotEmpty;
+    if (!d.rd(d.ua + nav.icall_slot, icall) || !icall) return kTriSlotEmpty;
     ns.icall_ptr = icall;
     navutil::module_of(icall, ns.icall_mod, sizeof ns.icall_mod);
     if (!navutil::exec_ptr(icall)) return kTriSlotBadPtr;

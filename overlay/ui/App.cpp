@@ -35,6 +35,112 @@ static const char* kSubtitles[] = {
     "Lua 脚本控制台", "MCP 服务接口", "显示与布局", "项目信息"
 };
 
+// 侧栏矢量图标：直接用 ImDrawList 图元绘制，语义与页面功能一一对应，
+// 取代原先 kIcons 里 A/B/C/D/G/H/E/F 的字母-字形映射。
+// 绘制范围为以 center 为中心、半径 r 的正方形，坐标用 [-1,1] 归一化。
+static void DrawNavIcon(ImDrawList* dl, Page page, const ImVec2& center, float r, ImU32 col)
+{
+    const auto P = [&](float x, float y) { return ImVec2(center.x + x * r, center.y + y * r); };
+    const float t = ImMax(1.0f, r * 0.16f);
+    const int   seg = 12;
+
+    switch (page)
+    {
+    case Page::Home: // 仪表盘：半圆弧 + 指针 + 底座
+    {
+        ImVec2 arc[13];
+        for (int i = 0; i <= 12; ++i)
+        {
+            const float a = 3.14159265f - 3.14159265f * i / 12.0f;
+            arc[i] = P(cosf(a) * 0.82f, -sinf(a) * 0.82f);
+        }
+        dl->AddPolyline(arc, 13, col, false, t);
+        dl->AddLine(P(-0.82f, 0.0f), P(-0.82f, 0.22f), col, t);
+        dl->AddLine(P( 0.82f, 0.0f), P( 0.82f, 0.22f), col, t);
+        dl->AddLine(center, P(0.34f, -0.42f), col, t);
+        dl->AddCircleFilled(center, t * 0.9f, col, 8);
+        break;
+    }
+    case Page::Esp: // 眼睛：杏仁形轮廓 + 瞳孔
+    {
+        ImVec2 eye[10];
+        eye[0] = P(-1.00f,  0.00f);
+        eye[1] = P(-0.50f, -0.60f);
+        eye[2] = P( 0.00f, -0.78f);
+        eye[3] = P( 0.50f, -0.60f);
+        eye[4] = P( 1.00f,  0.00f);
+        eye[5] = P( 0.50f,  0.60f);
+        eye[6] = P( 0.00f,  0.78f);
+        eye[7] = P(-0.50f,  0.60f);
+        eye[8] = eye[0];
+        dl->AddPolyline(eye, 9, col, false, t);
+        dl->AddCircle(center, r * 0.30f, col, seg, t);
+        dl->AddCircleFilled(center, t * 0.8f, col, 8);
+        break;
+    }
+    case Page::Battle: // 交叉双剑：两条利刃 + 护手
+    {
+        dl->AddLine(P(-0.78f, -0.78f), P(0.72f, 0.72f), col, t);
+        dl->AddLine(P( 0.78f, -0.78f), P(-0.72f, 0.72f), col, t);
+        dl->AddLine(P(-0.92f, -0.34f), P(-0.34f, -0.92f), col, t);
+        dl->AddLine(P( 0.92f, -0.34f), P( 0.34f, -0.92f), col, t);
+        dl->AddCircleFilled(P(-0.80f, -0.80f), t * 0.7f, col, 8);
+        dl->AddCircleFilled(P( 0.80f, -0.80f), t * 0.7f, col, 8);
+        break;
+    }
+    case Page::Activity: // 日历：箱体 + 挂环 + 日期格
+    {
+        dl->AddRect(P(-0.86f, -0.60f), P(0.86f, 0.84f), col, t, 0, t);
+        dl->AddLine(P(-0.86f, -0.20f), P(0.86f, -0.20f), col, t);
+        dl->AddLine(P(-0.44f, -0.96f), P(-0.44f, -0.45f), col, t);
+        dl->AddLine(P( 0.44f, -0.96f), P( 0.44f, -0.45f), col, t);
+        dl->AddCircleFilled(P(-0.42f, 0.20f), t * 0.7f, col, 6);
+        dl->AddCircleFilled(P( 0.00f, 0.20f), t * 0.7f, col, 6);
+        dl->AddCircleFilled(P( 0.42f, 0.20f), t * 0.7f, col, 6);
+        dl->AddCircleFilled(P(-0.42f, 0.58f), t * 0.7f, col, 6);
+        dl->AddCircleFilled(P( 0.00f, 0.58f), t * 0.7f, col, 6);
+        break;
+    }
+    case Page::Lua: // 终端：外框 + >_ 提示符
+    {
+        dl->AddRect(P(-0.92f, -0.74f), P(0.92f, 0.74f), col, t, 0, t);
+        dl->AddLine(P(-0.58f, -0.34f), P(-0.12f, 0.00f), col, t);
+        dl->AddLine(P(-0.12f,  0.00f), P(-0.58f, 0.34f), col, t);
+        dl->AddLine(P(-0.02f,  0.46f), P(0.58f, 0.46f), col, t);
+        break;
+    }
+    case Page::Mcp: // 网络服务：中心节点 + 三路连接
+    {
+        const ImVec2 n[3] = { P(0.0f, -0.78f), P(-0.76f, 0.52f), P(0.76f, 0.52f) };
+        for (int i = 0; i < 3; ++i) dl->AddLine(center, n[i], col, t * 0.85f);
+        dl->AddCircleFilled(center, r * 0.24f, col, seg);
+        for (int i = 0; i < 3; ++i) dl->AddCircleFilled(n[i], r * 0.15f, col, seg);
+        break;
+    }
+    case Page::Ui: // 滑块：三条轨道 + 手柄
+    {
+        const float ys[3] = { -0.60f, 0.0f, 0.60f };
+        const float xs[3] = { -0.30f, 0.46f, -0.02f };
+        for (int i = 0; i < 3; ++i)
+        {
+            dl->AddLine(P(-0.92f, ys[i]), P(0.92f, ys[i]), col, t * 0.85f);
+            dl->AddCircleFilled(P(xs[i], ys[i]), r * 0.22f, col, seg);
+        }
+        break;
+    }
+    case Page::About: // 信息：圆圈 + i
+    {
+        dl->AddCircle(center, r * 0.88f, col, seg, t);
+        dl->AddCircleFilled(P(0.0f, -0.44f), t * 0.85f, col, 8);
+        dl->AddLine(P(0.0f, -0.16f), P(0.0f, 0.56f), col, t * 1.1f);
+        break;
+    }
+    default:
+        dl->AddRect(P(-0.7f, -0.7f), P(0.7f, 0.7f), col, t, 0, t);
+        break;
+    }
+}
+
 void AppInit()
 {
     g_visible = true;
@@ -190,9 +296,8 @@ void AppFrame(float dt)
         const ImVec2 ip(rp.x + 9.0f * s, rp.y + (row_sz.y - icon) * 0.5f);
         dl->AddRectFilled(ip, ImVec2(ip.x + icon, ip.y + icon),
                           CU(g_tab == i ? theme::AccentSoft : theme::Border, 0.75f), 8.0f * s);
-        if (ico_0)
-            dl->AddText(ico_0, 18.0f * s, ImVec2(ip.x + 4.0f * s, ip.y + 3.0f * s),
-                        CU(theme::TextHi), PageIcon((Page)i));
+        DrawNavIcon(dl, (Page)i, ImVec2(ip.x + icon * 0.5f, ip.y + icon * 0.5f),
+                    icon * 0.32f, CU(theme::TextHi, g_tab == i ? 1.0f : 0.82f));
         if (ubu_child)
             dl->AddText(ubu_child, 15.0f * s, ImVec2(rp.x + 44.0f * s, rp.y + 5.0f * s),
                         CU(theme::TextHi), PageName((Page)i));

@@ -25,9 +25,11 @@ import struct
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 import invsig
 
-ROOT = r"D:\My Projects\Honkai Impact"
-DLL = r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game\BH3_Data\Native\UserAssembly.dll"
-META = r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game\BH3_Data\Managed\Metadata\global-metadata.dat"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_GAME = os.environ.get("BH3_GAME_DIR",
+                       r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game")
+DLL = os.environ.get("BH3_UA", os.path.join(_GAME, "BH3_Data", "Native", "UserAssembly.dll"))
+META = os.environ.get("BH3_META", os.path.join(_GAME, "BH3_Data", "Managed", "Metadata", "global-metadata.dat"))
 CLASSES = os.path.join(ROOT, "sdk", "sdk_classes.tsv")
 METHODS = os.path.join(ROOT, "sdk", "sdk_methods.tsv")
 LIVE_METHODS = r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game\bh3_methods.tsv"

@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 namespace ui
 {
@@ -26,20 +27,11 @@ static const char* kNames[] = {
     "关于本项目",
 };
 
-static const char* kIcons[] = { "A", "B", "C", "D", "G", "H", "E", "F" };
-
 const char* PageName(Page p)
 {
     int i = (int)p;
     if (i < 0 || i >= (int)Page::Count) i = 0;
     return kNames[i];
-}
-
-const char* PageIcon(Page p)
-{
-    int i = (int)p;
-    if (i < 0 || i >= (int)Page::Count) i = 0;
-    return kIcons[i];
 }
 
 bool Card(const char* title, const ImVec2& size)
@@ -183,7 +175,7 @@ void PageEsp()
 
     CardGap();
 
-    if (Card("本帧状态", ImVec2(272.0f, 240.0f)))
+    if (Card("本帧状态", ImVec2(272.0f, 340.0f)))
     {
         snprintf(buf, sizeof buf, "%d", St().esp_drawn);
         KeyValue("已绘制", buf);
@@ -193,6 +185,17 @@ void PageEsp()
             ? (float)St().esp_drawn / (float)St().monster_n : 0.0f;
         if (ratio > 1.0f) ratio = 1.0f;
         ImGui::ProgressBar(ratio, ImVec2(-1.0f, 6.0f * S()), "");
+        static const char* fail_txt[] = { "正常", "无管理器", "读列表失败", "length 超上限" };
+        snprintf(buf, sizeof buf, "%s (%d)",
+                 fail_txt[St().gadget_fail < 4 ? St().gadget_fail : 3], St().gadget_fail);
+        KeyValue("宝箱采集状态", buf);
+        snprintf(buf, sizeof buf, "%d / %d / %d",
+                 St().gadget_list_n, St().gadget_cap_n, St().gadget_read_n);
+        KeyValue("宝箱 List/数组/读入", buf);
+        snprintf(buf, sizeof buf, "%d / %d / %d / %d",
+                 St().gadget_drop_inst, St().gadget_drop_cls,
+                 St().gadget_drop_cfg, St().gadget_drop_coord);
+        KeyValue("丢弃 实体/类/配置/坐标", buf);
     }
     CardEnd();
 
@@ -239,7 +242,9 @@ void PageEsp()
     // → ovnavui::request_to(x,y,z) → 游戏主线程 nav_tick 计算 NavMesh 路径。
     static int  nav_cat   = 0;                       // 0=宝箱/采集 1=采集物 2=NPC 3=怪物
     static char nav_filter[64] = "";                 // 名称过滤
-    if (Card("寻路", ImVec2(546.0f, 560.0f)))
+    // 卡片高度必须容纳状态区 + 列表 + 缓存行：BeginChildPos 强制 NoScrollbar，
+    // 高度不足会直接裁掉列表底部，导致末尾实体滚不到也点不到（旧值 560 不够）。
+    if (Card("寻路", ImVec2(546.0f, 880.0f)))
     {
         const char* cats[] = { "宝箱/采集", "晶体采集物", "NPC", "怪物" };
         for (int c = 0; c < 4; ++c) {
@@ -292,7 +297,18 @@ void PageEsp()
         int n = 0;
         ovnavui::fetch(nav_cat, items, 256, n);
 
-        ImGui::BeginChild("##navlist", ImVec2(0, 300.0f * S()), true);
+        // 按距离由近到远排序，序号与 ESP 画面标签共用 ovnavui::rank_of 的全局编号。
+        std::sort(items, items + n, [](const ovnavui::Item& a, const ovnavui::Item& b) {
+            const int ra = ovnavui::rank_of(a.p), rb = ovnavui::rank_of(b.p);
+            if (ra > 0 && rb > 0 && ra != rb) return ra < rb;
+            if (a.dist != b.dist) return a.dist < b.dist;
+            return std::strcmp(a.label[0] ? a.label : a.name,
+                               b.label[0] ? b.label : b.name) < 0;
+        });
+
+        // 列表高度取剩余空间（预留缓存行），避免固定高度与卡片其他内容叠加后溢出。
+        const float navListH = ImMax(120.0f * S(), ImGui::GetContentRegionAvail().y - 34.0f * S());
+        ImGui::BeginChild("##navlist", ImVec2(0, navListH), true);
         int shown = 0;
         for (int i = 0; i < n; ++i) {
             const ovnavui::Item& it = items[i];
@@ -311,8 +327,9 @@ void PageEsp()
             }
             if (++shown > 100) break;   // 列表上限
             const char* nm = it.label[0] ? it.label : (it.name[0] ? it.name : "(未命名)");
+            const int rk = ovnavui::rank_of(it.p);
             char row[192];
-            snprintf(row, sizeof row, "%s  (%.0fm)", nm, it.dist);
+            snprintf(row, sizeof row, "[%d] %s %.0fm", rk > 0 ? rk : shown, nm, it.dist);
             ImGui::PushID(i);
             const bool pressed = ImGui::Button("寻路", ImVec2(46.0f * S(), 20.0f * S()));
             ImGui::SameLine(0.0f, 4.0f * S());

@@ -32,6 +32,7 @@ import re
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PROFILE = os.path.join(ROOT, "overlay", "bh3_profile.inc")
 DEFAULT_NAMED = os.path.join(ROOT, "sdk", "bh3_methods_named.tsv")
+DEFAULT_FULL = os.path.join(ROOT, "sdk", "bh3_methods_full.tsv")
 DEFAULT_OUT = os.path.join(ROOT, "overlay", "bh3_tokens.inc")
 
 # key -> (class, method)。key 必须与 bh3_profile.inc 的 GenEntry 第一列一致。
@@ -53,6 +54,11 @@ SYMBOLS = {
     "dmg_final": ("MHEMGJMNDJI", "ResolveAttackDataFinal"),
     "anim_speed_apply": ("BaseMonoAnimatorEntity", "ApplyOverrideAnimatorSpeed"),
     "anim_speed_cancel": ("BaseMonoAnimatorEntity", "CancelOverrideAnimatorSpeed"),
+    "navmesh_calculate_triangulation": ("NavMesh", "CalculateTriangulation"),
+    "root_node_position": ("BaseMonoEntity", "get_RootNodePosition"),
+    "get_local_avatar": ("AvatarManager", "GetLocalAvatar"),
+    "teleport_to": ("BaseMonoAnimatorEntity", "TeleportTo"),
+    "get_singleton_impl": ("SingletonManager", "GetSingletonInstance"),
 }
 
 ULTRA_CLASSES = [
@@ -67,26 +73,56 @@ for _i, _cls in enumerate(ULTRA_CLASSES):
     SYMBOLS["ultra%d" % _i] = (_cls, "AllowUseUltra")
 
 
-def load_tokens(path):
+def load_tokens(path, extra=None):
     """(class, method) -> token。只收 rva 非 0 且 token 非 0 的行。"""
     out = {}
+    for src in (p for p in (path, extra) if p and os.path.exists(p)):
+        with open(src, encoding="utf-8", errors="replace") as f:
+            head = f.readline().rstrip("\n").split("\t")
+            idx = {name: i for i, name in enumerate(head)}
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < len(head):
+                    continue
+                try:
+                    token = int(parts[idx["token"]], 16)
+                    rva = int(parts[idx["rva"]], 16)
+                except (ValueError, KeyError):
+                    continue
+                if not token or not rva:
+                    continue
+                cls = parts[idx["class"]]
+                if "." in cls:
+                    cls = cls.rsplit(".", 1)[-1]
+                key = (cls, parts[idx["method"]])
+                out.setdefault(key, set()).add(token)
+    return out
+
+
+def token_by_rva(path, cls, method, rva):
+    """多重载时按精确 RVA 从 full 表取对应 token。"""
+    if not path or not os.path.exists(path) or not rva:
+        return 0
     with open(path, encoding="utf-8", errors="replace") as f:
         head = f.readline().rstrip("\n").split("\t")
         idx = {name: i for i, name in enumerate(head)}
+        if "rva" not in idx or "token" not in idx:
+            return 0
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < len(head):
                 continue
+            c = parts[idx["class"]]
+            if "." in c:
+                c = c.rsplit(".", 1)[-1]
+            if c != cls or parts[idx["method"]] != method:
+                continue
             try:
-                token = int(parts[idx["token"]], 16)
-                rva = int(parts[idx["rva"]], 16)
-            except (ValueError, KeyError):
+                if int(parts[idx["rva"]], 16) == rva:
+                    return int(parts[idx["token"]], 16)
+            except ValueError:
                 continue
-            if not token or not rva:
-                continue
-            key = (parts[idx["class"]], parts[idx["method"]])
-            out.setdefault(key, set()).add(token)
-    return out
+    return 0
 
 
 def parse_profile(path):
@@ -106,11 +142,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--named", default=DEFAULT_NAMED)
+    ap.add_argument("--full", default=DEFAULT_FULL)
     ap.add_argument("--out", default=DEFAULT_OUT)
     args = ap.parse_args()
 
     entries = parse_profile(args.profile)
-    table = load_tokens(args.named)
+    table = load_tokens(args.named, args.full)
 
     resolved, missing = [], []
     out_rows = []
@@ -120,6 +157,14 @@ def main():
         if len(hits) == 1:
             out_rows.append((key, rva, hits[0]))
             resolved.append(key)
+        elif len(hits) > 1 and pair:
+            tok = token_by_rva(args.full, pair[0], pair[1], rva)
+            if tok:
+                out_rows.append((key, rva, tok))
+                resolved.append(key)
+            else:
+                out_rows.append((key, rva, 0))
+                missing.append("%s(%d 候选, RVA 未匹配)" % (key, len(hits)))
         else:
             out_rows.append((key, rva, 0))
             missing.append("%s(%s)" % (key, "未映射" if not pair else

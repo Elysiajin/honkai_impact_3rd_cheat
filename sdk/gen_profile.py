@@ -20,6 +20,7 @@ import struct
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_UA = r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game\BH3_Data\Native\UserAssembly.dll"
 DEFAULT_NAMED = os.path.join(ROOT, "sdk", "bh3_methods_named.tsv")
+DEFAULT_FULL = os.path.join(ROOT, "sdk", "bh3_methods_full.tsv")
 DEFAULT_OUT = os.path.join(ROOT, "overlay", "bh3_profile.inc")
 
 ULTRA_CLASSES = [
@@ -32,6 +33,15 @@ ULTRA_CLASSES = [
 ]
 
 # key, class, method, 从方法起点到实际 patch 点的偏移, 前导字节数
+# 更新后必须从新 build 重算的裸偏移。full 表补 named 表缺失的 RVA。
+# (key, class, method, 方法起点到 patch 点的 delta, 前导字节数)
+LIVE_METHODS = [
+    ("root_node_position", "BaseMonoEntity", "get_RootNodePosition", 0, 8),
+    ("get_local_avatar", "AvatarManager", "GetLocalAvatar", 0, 8),
+    ("teleport_to", "BaseMonoAnimatorEntity", "TeleportTo", 0, 8, "5657534883ec5048"),
+    ("get_singleton_impl", "SingletonManager", "GetSingletonInstance", 0, 8),
+]
+
 METHODS = [
     ("camera_main", "Camera", "get_main", 0, 16),
     ("camera_pixel_w", "Camera", "get_pixelWidth", 0, 16),
@@ -118,18 +128,25 @@ def prologue(path, sections, rva, n):
     return "".join("%02x" % x for x in b)
 
 
-def load_named(path):
+def load_named(path, extra=None):
     rows = {}
-    with open(path, encoding="utf-8", errors="replace") as f:
-        head = f.readline().rstrip("\n").split("\t")
-        for line in f:
-            d = dict(zip(head, line.rstrip("\n").split("\t")))
-            try:
-                rva = int(d.get("rva", "0x0"), 16)
-            except ValueError:
-                continue
-            if rva:
-                rows.setdefault((d.get("class", ""), d.get("method", "")), set()).add(rva)
+    for p in (path, extra):
+        if not p or not os.path.exists(p):
+            continue
+        with open(p, encoding="utf-8", errors="replace") as f:
+            head = f.readline().rstrip("\n").split("\t")
+            for line in f:
+                d = dict(zip(head, line.rstrip("\n").split("\t")))
+                try:
+                    rva = int(d.get("rva", "0x0"), 16)
+                except ValueError:
+                    continue
+                if not rva:
+                    continue
+                cls = d.get("class", "")
+                if "." in cls:
+                    cls = cls.rsplit(".", 1)[-1]
+                rows.setdefault((cls, d.get("method", "")), set()).add(rva)
     return rows
 
 
@@ -141,12 +158,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ua", default=os.environ.get("BH3_UA", DEFAULT_UA))
     ap.add_argument("--named", default=DEFAULT_NAMED)
+    ap.add_argument("--full", default=DEFAULT_FULL)
     ap.add_argument("--out", default=DEFAULT_OUT)
     args = ap.parse_args()
 
     sections = pe_sections(args.ua)
     timestamp, image_size = pe_fingerprint(args.ua)
-    rows = load_named(args.named)
+    rows = load_named(args.named, args.full)
 
     entries = []
     unresolved = []
@@ -161,6 +179,24 @@ def main():
         rva = hits[0] + delta
         entries.append((key, rva, prologue(args.ua, sections, rva, plen), plen, True))
 
+    for spec in LIVE_METHODS:
+        key, cls, method, delta, plen = spec[:5]
+        want = spec[5] if len(spec) > 5 else ""
+        hits = sorted(rows.get((cls, method), set()))
+        if not hits:
+            unresolved.append("%s (%s.%s): 未找到" % (key, cls, method))
+            continue
+        if len(hits) > 1 and want:
+            matches = [h for h in hits if prologue(args.ua, sections, h, plen) == want]
+            if len(matches) == 1:
+                hits = matches
+        if len(hits) != 1:
+            unresolved.append("%s (%s.%s): 有 %d 个候选 %s" % (
+                key, cls, method, len(hits), [hex(x) for x in hits]))
+            continue
+        rva = hits[0] + delta
+        entries.append((key, rva, prologue(args.ua, sections, rva, plen), plen, True))
+
     for key, rva, plen in RAW:
         entries.append((key, rva, prologue(args.ua, sections, rva, plen), plen, False))
 
@@ -170,13 +206,14 @@ def main():
             print("    " + u)
         print("[-] 已生成 profile，但这些符号会以缺失状态写入；请更新符号表后重跑")
         # 缺失的符号仍写 0，运行时校验会判为无效，不会误调用
-        for key, cls, method, delta, plen in METHODS:
+        for spec in METHODS + LIVE_METHODS:
+            key = spec[0]
             if not any(e[0] == key for e in entries):
                 entries.append((key, 0, "", 0, False))
 
     # 保持稳定顺序：METHODS -> ULTRA -> RAW 的声明顺序由上面的 entries 构造顺序保证，
     # 但“缺失补 0”的项会追加到尾部。为了让枚举顺序始终可预测，按声明顺序重排。
-    order = [m[0] for m in METHODS] + [r[0] for r in RAW]
+    order = [m[0] for m in METHODS] + [m[0] for m in LIVE_METHODS] + [r[0] for r in RAW]
     entries.sort(key=lambda e: order.index(e[0]))
 
     enum_lines = []

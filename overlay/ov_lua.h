@@ -239,6 +239,33 @@ inline void add_states_from_object(ov::Data& d, Session& s, uintptr_t obj)
     }
 }
 
+inline bool find_state_registry(ov::Data& d, Session& s)
+{
+    if (!s.lua_klass) s.lua_klass = ovr::FindKlass("LuaState");
+    if (!s.lua_klass) return false;
+    static const char* kMgr[] = {
+        "MoleMole.RPSLuaManager",
+        "MoleMole.UILuaManager",
+        "MoleMole.LuaManager",
+    };
+    for (int i = 0; i < (int)(sizeof kMgr / sizeof kMgr[0]); ++i)
+    {
+        const uintptr_t mgr = ovn::registry_instance(d, kMgr[i]);
+        if (!mgr || !d.readable(mgr, 0x30)) continue;
+        for (uintptr_t off = 0x18; off <= 0x30; off += 8)
+        {
+            uintptr_t p = 0;
+            if (!d.rd(mgr + off, p) || !p || !d.readable(p, 0x68)) continue;
+            uintptr_t k = 0, L = 0;
+            if (!d.rd(p, k) || k != s.lua_klass) continue;
+            if (!d.rd(p + 0x60, L) || !L || !d.readable(L, 8)) continue;
+            add_state(d, s, p, true);
+            if (s.n > 0) return true;
+        }
+    }
+    return false;
+}
+
 // 快速路径：LuaScriptMgr 静态区里的 Instance → <lua> → LuaState → +0x60 = L，只探测静态区与单个对象，不扫堆。
 inline bool find_state_fast(ov::Data& d, Session& s)
 {
@@ -278,10 +305,10 @@ inline void start_scan(ov::Data& d, Session& s)
     s.scanning = true;
     s.mgr_n = 0;
 
-    if (find_state_fast(d, s))
+    if (find_state_registry(d, s) || find_state_fast(d, s))
     {
         s.scanning = false;
-        lstrcpynA(s.msg, "LuaState 快速定位（LuaScriptMgr 静态字段）", (int)sizeof s.msg);
+        lstrcpynA(s.msg, "LuaState 注册表/静态字段直取", (int)sizeof s.msg);
         return;
     }
 

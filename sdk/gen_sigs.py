@@ -1,5 +1,6 @@
 import csv
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -10,17 +11,68 @@ from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 
 from dump import Dump, UA_BASE
 
-SIGS = [
-    ("is_sp_enough", 31, 0x08011F70),
-    ("get_skill_cd", 32, 0x08009530),
-    ("is_skill_has_cd", 33, 0x080152A0),
-]
+PROFILE_RE = re.compile(
+    r'\{\s*"([a-z0-9_]+)"\s*,\s*0x([0-9A-Fa-f]+)u?')
+ENUM_RE = re.compile(r'^\s*Sym([A-Za-z0-9]+)\s*=\s*(\d+)\s*,', re.M)
+SIG_KEYS = ["is_sp_enough", "get_skill_cd", "is_skill_has_cd"]
+
+
+def camel(key):
+    return "".join(p[:1].upper() + p[1:] for p in key.split("_"))
+
+
+def profile_data():
+    txt = open(os.path.join(ROOT, "overlay", "bh3_profile.inc"),
+               encoding="utf-8", errors="replace").read()
+    rvas = {m.group(1): int(m.group(2), 16) for m in PROFILE_RE.finditer(txt)}
+    enums = {m.group(1): int(m.group(2)) for m in ENUM_RE.finditer(txt)}
+    return rvas, enums
+
+
+def build_sigs():
+    rvas, enums = profile_data()
+    out = []
+    for key in SIG_KEYS:
+        rva = rvas.get(key, 0)
+        sym = enums.get(camel(key))
+        if not rva or sym is None:
+            raise SystemExit("profile 缺少签名符号 %s，先跑 gen_profile.py" % key)
+        out.append((key, sym, rva))
+    return out
 
 TAKE = 32
 
 
+UA_PATH = os.environ.get("BH3_UA", r"D:\Games\miHoYo Launcher\games\Honkai Impact 3rd Game\BH3_Data\Native\UserAssembly.dll")
+
+
+def rva_to_off(path, rva):
+    import struct
+    with open(path, "rb") as f:
+        h = f.read(0x1000)
+    e = struct.unpack_from("<I", h, 0x3C)[0]
+    nsec = struct.unpack_from("<H", h, e + 6)[0]
+    optsz = struct.unpack_from("<H", h, e + 20)[0]
+    sec = e + 24 + optsz
+    for i in range(nsec):
+        o = sec + i * 40
+        vs, va, rs, ro = struct.unpack_from("<IIII", h, o + 8)
+        if va <= rva < va + max(vs, rs):
+            return ro + (rva - va)
+    return None
+
+
+def read_ua(rva, n):
+    off = rva_to_off(UA_PATH, rva)
+    if off is None:
+        return b"\x00" * n
+    with open(UA_PATH, "rb") as f:
+        f.seek(off)
+        return f.read(n)
+
+
 def mask_pattern(d, rva):
-    raw = bytearray(d.read(UA_BASE + rva, TAKE))
+    raw = bytearray(read_ua(rva, TAKE))
     mask = bytearray(b"\x01" * TAKE)
     md = Cs(CS_ARCH_X86, CS_MODE_64)
     md.detail = True
@@ -78,7 +130,11 @@ def count_hits(d, raw, mask, want_va):
 
 
 def main():
-    d = Dump()
+    sigs = build_sigs()
+    try:
+        d = Dump()
+    except FileNotFoundError:
+        d = None
     lines = []
     lines.append("namespace ovp")
     lines.append("{")
@@ -94,7 +150,7 @@ def main():
     lines.append("")
     lines.append("static const GenSig kGenSigs[] =")
     lines.append("{")
-    for name, sym, rva in SIGS:
+    for name, sym, rva in sigs:
         raw, mask = mask_pattern(d, rva)
         hx = ", ".join("0x%02X" % b for b in raw)
         mx = ", ".join("0x%02X" % b for b in mask)
@@ -103,7 +159,7 @@ def main():
         lines.append("      { %s } }, // %s" % (mx, name))
     lines.append("};")
     lines.append("")
-    lines.append("constexpr int kSigCount = %d;" % len(SIGS))
+    lines.append("constexpr int kSigCount = %d;" % len(sigs))
     lines.append("")
     lines.append("} // namespace ovp")
     lines.append("")
@@ -112,13 +168,17 @@ def main():
     with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
     print("wrote %s" % out)
-    for name, sym, rva in SIGS:
+    for name, sym, rva in sigs:
         raw, mask = mask_pattern(d, rva)
         fixed = sum(1 for m in mask if m)
-        hits = count_hits(d, raw, mask, UA_BASE + rva)
-        at = [h for h in hits if abs(h - (UA_BASE + rva)) < 0x10000]
-        print("%-18s rva=0x%08X fixed=%d/%d hits=%d self=%d"
-              % (name, rva, fixed, TAKE, len(hits), len(at)))
+        if d:
+            hits = count_hits(d, raw, mask, UA_BASE + rva)
+            at = [h for h in hits if abs(h - (UA_BASE + rva)) < 0x10000]
+            print("%-18s rva=0x%08X fixed=%d/%d hits=%d self=%d"
+                  % (name, rva, fixed, TAKE, len(hits), len(at)))
+        else:
+            print("%-18s rva=0x%08X fixed=%d/%d (无 regions.csv，跳过命中计数)"
+                  % (name, rva, fixed, TAKE))
 
 
 if __name__ == "__main__":
