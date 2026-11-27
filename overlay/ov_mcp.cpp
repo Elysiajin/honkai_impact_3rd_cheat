@@ -71,6 +71,7 @@ struct GameInfo
     int       monsters = 0;
     bool      cam_ok = false;
     char      msg[160] = { 0 };
+    char      diag[256] = { 0 };
     uint64_t  stamp = 0;
 };
 GameInfo g_game;
@@ -689,6 +690,7 @@ Json ToolStatus(const Json&)
     j["monsters"] = g.monsters;
     j["cam_ok"] = g.cam_ok;
     j["msg"] = g.msg;
+    j["diag"] = g.diag;
     j["stamp_ms"] = (uint64_t)g.stamp;
 
     if (g.ua)
@@ -1509,7 +1511,7 @@ void SetLuaEvalHandler(LuaEvalHandler handler)
 int ToolCount() { return 8; }
 
 void UpdateGameStatus(uintptr_t ua, bool ready, int avatars, int monsters,
-                      bool cam_ok, const char* msg)
+                      bool cam_ok, const char* msg, const char* diag)
 {
     std::lock_guard<std::mutex> lock(g_game_mu);
     g_game.ua = ua;
@@ -1519,6 +1521,7 @@ void UpdateGameStatus(uintptr_t ua, bool ready, int avatars, int monsters,
     g_game.cam_ok = cam_ok;
     g_game.stamp = GetTickCount64();
     std::snprintf(g_game.msg, sizeof g_game.msg, "%s", msg ? msg : "");
+    std::snprintf(g_game.diag, sizeof g_game.diag, "%s", diag ? diag : "");
 }
 
 void OnGameThreadTick()

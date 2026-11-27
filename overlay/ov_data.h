@@ -17,9 +17,11 @@ public:
     uintptr_t ua = 0;
     uintptr_t str_klass = 0;
     int count = 0;
+    uint64_t single_t = 0;
     char last_error[160] = "";
     bh3::Runtime rt;
     std::unordered_map<std::string, uintptr_t> clsmap;
+    std::unordered_map<std::string, uintptr_t> instmap;
 
     uintptr_t find(const char* n) const {
         auto it = clsmap.find(n);
@@ -28,6 +30,8 @@ public:
 
     bool init();
     bool ready_ok() const { return ua != 0; }
+    // 管理器实例是进关卡时才创建的，启动时可能都还是 null，需要定期补建。
+    void refresh_singletons();
 
     const std::string& name_ref(uintptr_t klass) const {
         static const std::string kUnknown = "?";
@@ -118,7 +122,7 @@ public:
         if (!out || !cap) return false;
         out[0] = 0;
         uintptr_t name = 0;
-        if (!klass || !rd(klass + 0x20, name) || !name) return false;
+        if (!klass || !rd(klass + 0x58, name) || !name) return false;
         for (size_t i = 0; i + 1 < cap; ++i) {
             unsigned char ch = 0;
             if (!rd(name + i, ch) || (ch && (ch < 32 || ch > 126))) {
@@ -163,56 +167,29 @@ inline bool Data::init() {
     if (!rt.attach()) { snprintf(last_error, sizeof last_error, "UserAssembly not loaded"); return false; }
     // 先校验 profile：版本不匹配时不读取任何游戏数据，避免用到过期偏移。
     if (!ovp::Init(rt.base())) { snprintf(last_error, sizeof last_error, "%s", ovp::Error()); return false; }
-    // 新构建上这些全局槽的 RVA 也会变；此时跳过该门禁，改由运行期按名解析兜底。
-    if (ovp::CurrentStatus() != ovp::Status::StaleBuild) {
-        uintptr_t metadata = 0;
-        uint32_t version = 0;
-        if (!rd(rt.base() + bh3::RVA_METADATA_BODY, metadata) || !metadata ||
-            !rd(rt.base() + bh3::RVA_IL2CPP_VERSION, version) || version != 7) {
-            snprintf(last_error, sizeof last_error, "il2cpp not ready");
-            return false;
-        }
-    }
     ua = rt.base();
     ovl::Start(ua);
-    if (!build_index()) { snprintf(last_error, sizeof last_error, "waiting for live scene managers"); ua = 0; return false; }
+    // 类名索引在后台线程建；没建好就下一帧再来，绝不阻塞游戏线程。
+    if (!ovl::Ready()) {
+        snprintf(last_error, sizeof last_error, "building class index");
+        ua = 0;
+        return false;
+    }
+    // 管理器实例由管理器注册表按全名直接取，不再扫描 Singleton 表或类名堆。
+    build_index();
     last_error[0] = 0;
     return true;
 }
 
 inline bool Data::build_index() {
-    // The overlay only needs these two manager classes. Scanning the entire
-    // growing IL2CPP heap during startup races the runtime's commits/teardown.
-    // Resolve only live, named managers via the already verified singleton chain.
     clsmap.clear();
+    instmap.clear();
     name_cache.clear();
     str_klass = 0;
-    // Raw 只是编译期表里的值；生产路径上 Data::init 已先做过 profile 校验。
-    const uint32_t globals[] = {
-        ovp::Raw(ovp::SymAvatarMgrGlobal),
-        ovp::Raw(ovp::SymMonsterMgrGlobal),
-    };
-    const char* names[] = { "AvatarManager", "MonsterManager" };
-    for (int i = 0; i < 2; ++i) {
-        uintptr_t mi = 0, klass = 0, c = 0, x = 0, e = 0, manager = 0, mk = 0;
-        if (!rd(ua + globals[i], mi) || !mi || !rd(mi + 8, klass) || !klass ||
-            !rd(klass + 0x18, c) || !c || !rd(c + 0x10, x) || !x ||
-            !rd(x + 0x30, e) || !e || !rd(e, manager) || !manager ||
-            !rd(manager, mk) || !mk) continue;
-        char name[192] = {};
-        if (copy_name(mk, name, sizeof name) && std::strcmp(name, names[i]) == 0)
-            clsmap.emplace(names[i], mk);
-    }
-    // 单例链失效时（游戏更新改了全局槽或链偏移），改用运行期按类名解析出的 klass。
-    if (clsmap.size() < 2) {
-        for (int i = 0; i < 2; ++i) {
-            if (clsmap.find(names[i]) != clsmap.end()) continue;
-            const uintptr_t k = ovr::FindKlass(names[i]);
-            if (k) clsmap.emplace(names[i], k);
-        }
-    }
-    count = (int)clsmap.size();
-    return count == 2;
+    count = 0;
+    return true;
 }
+
+inline void Data::refresh_singletons() {}
 
 }

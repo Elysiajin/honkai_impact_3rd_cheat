@@ -29,6 +29,6 @@ void OnGameThreadTick();
 
 // 由游戏主线程每帧调用，缓存给 MCP 的状态。
 void UpdateGameStatus(uintptr_t ua, bool ready, int avatars, int monsters,
-                      bool cam_ok, const char* msg);
+                      bool cam_ok, const char* msg, const char* diag);
 
 }

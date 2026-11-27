@@ -37,7 +37,7 @@ ULTRA_CLASSES = [
 # (key, class, method, 方法起点到 patch 点的 delta, 前导字节数)
 LIVE_METHODS = [
     ("root_node_position", "BaseMonoEntity", "get_RootNodePosition", 0, 8),
-    ("get_local_avatar", "AvatarManager", "GetLocalAvatar", 0, 8),
+    ("get_local_avatar", "LevelDesignManager", "GetLocalAvatar", 0, 9, "56574883ec284889ce"),
     ("teleport_to", "BaseMonoAnimatorEntity", "TeleportTo", 0, 8, "5657534883ec5048"),
     ("get_singleton_impl", "SingletonManager", "GetSingletonInstance", 0, 8),
 ]

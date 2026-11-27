@@ -45,13 +45,10 @@ struct Settings
     int   star_count     = 110;   // 星点数量
 
     bool  esp_smooth = true;
-    bool  esp_team  = true;
     bool  gadget_on = true;
-    bool  npc_on    = true;
     bool  ray_on    = true;
     float ray_w     = 2.0f;
     float gadget_col[4] = { 1.00f, 0.80f, 0.20f, 1.00f };
-    float npc_col[4]    = { 0.20f, 1.00f, 1.00f, 1.00f };
 
     // 活动战斗
     int   act_pick   = 0;      // 0=相遇·回忆玩具小屋
@@ -79,7 +76,6 @@ struct Status
     int      avatar_n     = 0;
     int      monster_n    = 0;
     int      gadget_n     = 0;
-    int      npc_n        = 0;
     int      gadget_list_n = 0;
     int      gadget_cap_n  = 0;
     int      gadget_read_n = 0;
@@ -106,6 +102,10 @@ struct Status
     bool     atk_speed_applied = false;
     bool     dmg_applied    = false;
     bool     ohk_applied    = false;
+    uint32_t dmg_hits       = 0;
+    uint32_t dmg_mon_hits   = 0;
+    uintptr_t local_avatar  = 0;
+    bool     player_from_cam = false;
     uint64_t stamp        = 0;
 
     // Lua 控制台

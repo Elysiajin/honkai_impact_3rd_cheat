@@ -38,3 +38,10 @@ overlay/bh3_overlay.json
 
 # 本地工具缓存
 .workbuddy/
+
+# 9.2.0 SDK 超大导出物（超过 GitHub 单文件 100MB 限制）
+sdk/BH3_SDK_9.2.0/dump.cs
+sdk/BH3_SDK_9.2.0/sdk.sqlite
+
+# CMake 构建目录（编译产物）
+overlay/build/

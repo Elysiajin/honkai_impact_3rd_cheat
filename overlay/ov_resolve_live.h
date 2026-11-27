@@ -6,6 +6,7 @@
 #include "bh3_sigs.inc"
 
 #include <windows.h>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -123,23 +124,28 @@ inline MgrSlot& MgrCache(int idx)
 struct MgrCtx
 {
     uintptr_t off = 0;
+    uintptr_t klass = 0;
 };
 
 inline bool MgrValid(uintptr_t obj, void* ctx)
 {
-    const uintptr_t off = ((const MgrCtx*)ctx)->off;
+    const MgrCtx* c = (const MgrCtx*)ctx;
+    // 场景切换后旧管理器会被销毁/复用；先确认对象头的 klass 仍是目标类。
+    if (c->klass)
+    {
+        uintptr_t k = 0;
+        if (!detail::LiveRead(nullptr, obj, &k, sizeof k) || k != c->klass) return false;
+    }
+    const uintptr_t off = c->off;
     uintptr_t list = 0;
     if (!detail::LiveRead(nullptr, obj + off, &list, sizeof list) || !list) return false;
+    // 空列表也要算有效：还没进关卡时 items 就是 0，否则管理器永远认不出来。
     uintptr_t items = 0;
     int32_t size = 0;
-    if (!detail::LiveRead(nullptr, list + 0x10, &items, sizeof items) || !items) return false;
+    if (!detail::LiveRead(nullptr, list + 0x10, &items, sizeof items)) return false;
     if (!detail::LiveRead(nullptr, list + 0x18, &size, sizeof size)) return false;
     if (size < 0 || size > 4096) return false;
-    if (size > 0)
-    {
-        uintptr_t first = 0;
-        if (!detail::LiveRead(nullptr, items + 0x20, &first, sizeof first)) return false;
-    }
+    if (size > 0 && !items) return false;
     return true;
 }
 
@@ -147,17 +153,6 @@ inline uintptr_t ResolveManager(int idx, const char* name, uintptr_t list_off)
 {
     if (!name || !name[0]) return 0;
     MgrSlot& c = MgrCache(idx);
-    if (c.obj)
-    {
-        MgrCtx vc;
-        vc.off = list_off;
-        if (MgrValid(c.obj, &vc)) return c.obj;
-        c.obj = 0;
-    }
-    const DWORD now = GetTickCount();
-    if (c.stamp && now - c.stamp < 2000) return 0;
-    c.stamp = now;
-
     if (!c.klass)
     {
         c.klass = ovr::FindKlass(name);
@@ -165,6 +160,16 @@ inline uintptr_t ResolveManager(int idx, const char* name, uintptr_t list_off)
     }
     MgrCtx vc;
     vc.off = list_off;
+    vc.klass = c.klass;
+    if (c.obj)
+    {
+        if (MgrValid(c.obj, &vc)) return c.obj;
+        c.obj = 0;
+    }
+    const DWORD now = GetTickCount();
+    if (c.stamp && now - c.stamp < 2000) return 0;
+    c.stamp = now;
+
     const uintptr_t obj = ovr::FindInstance(c.klass, &MgrValid, &vc, 192ULL << 20);
     if (!obj) return 0;
     c.obj = obj;
@@ -173,7 +178,8 @@ inline uintptr_t ResolveManager(int idx, const char* name, uintptr_t list_off)
 
 inline uintptr_t AvatarManager()
 {
-    return ResolveManager(0, "AvatarManager", 0x50);
+    // 本构建 AvatarManager 的角色列表在 +0x40（+0x50 已不存在）。
+    return ResolveManager(0, "AvatarManager", 0x40);
 }
 
 inline uintptr_t MonsterManager()
@@ -221,91 +227,23 @@ inline bool Build()
     if (!ua) return false;
 
     DWORD t0 = GetTickCount();
-    ovr::ResetIndex();
-
-    const char* cls_names[ovp::SymCount];
-    for (int i = 0; i < ovp::SymCount; ++i)
-        cls_names[i] = ovp::kGenNames[i].klass;   // 可能含 nullptr（kGenNames 未满项），去重循环已判空
-    cls_names[ovp::SymIsSpEnough] = nullptr;
-    cls_names[ovp::SymGetSkillCd] = nullptr;
-    cls_names[ovp::SymIsSkillHasCd] = nullptr;
-    cls_names[ovp::SymAvatarMgrGlobal] = nullptr;
-    cls_names[ovp::SymMonsterMgrGlobal] = nullptr;
-
-    const char* uniq[ovp::SymCount];
-    int n_uniq = 0;
-    for (int i = 0; i < ovp::SymCount; ++i)
-    {
-        const char* c = cls_names[i];
-        if (!c || !c[0]) continue;   // 空指针/空串跳过
-        bool dup = false;
-        for (int j = 0; j < n_uniq; ++j)
-            if (std::strcmp(uniq[j], c) == 0) { dup = true; break; }
-        if (!dup) uniq[n_uniq++] = c;
-    }
-    uniq[n_uniq++] = "AvatarManager";
-    uniq[n_uniq++] = "MonsterManager";
-    uniq[n_uniq++] = "LuaState";
-    uniq[n_uniq++] = "String";
-    uniq[n_uniq++] = "LuaManager";
-    uniq[n_uniq++] = "UILuaManager";
-    uniq[n_uniq++] = "RPSLuaManager";
-    uniq[n_uniq++] = "LevelDesignManager";
-    uniq[n_uniq++] = "HonKaiTCGLuaManager";
-    uniq[n_uniq++] = "TiledGameScriptor";
-    uniq[n_uniq++] = "VisualNovelScriptor";
-    uniq[n_uniq++] = "LuaScriptMgr";
-    uniq[n_uniq++] = "PJMSGadgetActor";
-    uniq[n_uniq++] = "PJMSNPCActor";
-
-    const int nfound = ovr::BuildIndexFor(uniq, n_uniq);
-    int resolved = 0, mismatch = 0, by_sig = 0;
-
     uint32_t (&live)[ovp::SymCount] = LiveRvas();
-    for (int i = 0; i < ovp::SymCount; ++i) live[i] = 0;
-
+    int resolved = 0, mismatch = 0;
     for (int i = 0; i < ovp::SymCount; ++i)
     {
-        const ovp::GenName& g = ovp::kGenNames[i];
-        if (!g.klass || !g.klass[0] || !g.token) continue;   // klass 可能为空（数组未补满），防空引用
-        ovr::Hit hit;
-        if (!ovr::ByName(g.klass, g.token, &hit)) continue;
-        const uintptr_t fn = hit.fn + (uintptr_t)g.delta;
-        if (fn < ua || fn >= ua + 0x1284B000ULL) continue;
-        live[i] = (uint32_t)(fn - ua);
+        live[i] = ovp::StaticRva((ovp::Sym)i);
+        if (!live[i]) continue;
         ++resolved;
         if (ovp::Raw((ovp::Sym)i) && ovp::Raw((ovp::Sym)i) != live[i]) ++mismatch;
     }
 
-    const uintptr_t code_lo = ua + 0x3332000u;
-    const uintptr_t code_hi = ua + 0x12674200u;
-    for (int i = 0; i < ovp::kSigCount; ++i)
-    {
-        const ovp::GenSig& s = ovp::kGenSigs[i];
-        if (s.sym < 0 || s.sym >= ovp::SymCount) continue;
-        uintptr_t at = 0;
-        if (s.rva && MaskHit(ua + s.rva, s)) at = ua + s.rva;
-        else
-        {
-            at = ScanSigRange(code_lo, code_hi, s);
-            if (!at) at = ScanSigRange(ua, ua + 0x1284B000ULL, s);
-        }
-        if (!at) continue;
-        live[s.sym] = (uint32_t)(at - ua);
-        ++resolved;
-        ++by_sig;
-        if (ovp::Raw((ovp::Sym)s.sym) && ovp::Raw((ovp::Sym)s.sym) != live[s.sym]) ++mismatch;
-    }
-
     LiveStats& s = Stats();
     s.ms = GetTickCount() - t0;
-    s.found = nfound;
+    s.found = 0;
     s.resolved = resolved;
     s.mismatch = mismatch;
-    s.scanned = ovr::ScannedBytes();
-    std::snprintf(s.note, sizeof s.note,
-                  "klass %d/%d, 按名解析 %d, 按签名 %d, 与硬编码不一致 %d",
-                  nfound, n_uniq, resolved - by_sig, by_sig, mismatch);
+    s.scanned = 0;
+    std::snprintf(s.note, sizeof s.note, "SDK 静态 RVA %d 个（无扫描）", resolved);
     s.state = (resolved > 0) ? 2 : 1;
     detail::ReadyFlag() = (resolved > 0);
     return resolved > 0;
@@ -318,6 +256,32 @@ inline DWORD WINAPI ThreadProc(LPVOID)
     Build();
     return 0;
 }
+
+// Singleton`1 的收集单独走一次性后台线程：它要扫完所有元数据区段，
+// 放在 Build() 里会把注入后的第一帧卡住好几秒。管理器缺实例时才会触发。
+inline std::atomic<int>& SingleState()
+{
+    static std::atomic<int> v(0);   // 0=未开始 1=进行中 2=完成
+    return v;
+}
+
+inline DWORD WINAPI SingleProc(LPVOID)
+{
+    ovr::CollectSingletons();
+    SingleState().store(2);
+    return 0;
+}
+
+inline void EnsureSingletonScan()
+{
+    int expect = 0;
+    if (!SingleState().compare_exchange_strong(expect, 1)) return;
+    HANDLE t = CreateThread(nullptr, 1u << 20, &SingleProc, nullptr, 0, nullptr);
+    if (t) CloseHandle(t);
+    else SingleState().store(0);
+}
+
+inline int SingletonCount() { return (int)ovr::SingletonCandidates().size(); }
 
 inline bool Start(uintptr_t ua)
 {

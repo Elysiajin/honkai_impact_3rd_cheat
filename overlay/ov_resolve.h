@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_set>
 
 #include <windows.h>
 
@@ -55,6 +56,14 @@ inline std::vector<Region>& RegionsRef()
 inline std::vector<std::pair<std::string, uintptr_t> >& IndexRef()
 {
     static std::vector<std::pair<std::string, uintptr_t> > v;
+    return v;
+}
+
+// 所有 Singleton`1 泛型类的 klass。klass 地址每次启动都会重定位，
+// 不能写死；只能靠这里扫出来，再由调用方读各自的静态区拿实例。
+inline std::vector<uintptr_t>& SingletonsRef()
+{
+    static std::vector<uintptr_t> v;
     return v;
 }
 
@@ -154,32 +163,35 @@ inline void ResetIndex() { detail::IndexRef().clear(); detail::StatsRef() = Stat
 
 inline bool IsKlass(uintptr_t k, char* name_out, size_t cap)
 {
-    uintptr_t namep = 0, tab = 0, tdi = 0;
-    if (!detail::Rq(k + 0x20, namep) || !detail::InRegions(namep)) return false;
-    if (!detail::Rq(k + 0x80, tab) || !detail::InRegions(tab)) return false;
-    if (!detail::Rq(k + 0x88, tdi) || tdi >= 0x200000) return false;
+    uintptr_t namep = 0, mtab = 0;
+    if (!detail::Rq(k + 0x58, namep) || !detail::InRegions(namep)) return false;
+    if (!detail::Rq(k + 0x60, mtab) || !detail::InRegions(mtab)) return false;
     return detail::CStrAt(namep, name_out, cap);
 }
 
-inline int BuildIndexFor(const char* const* names, int count, size_t chunk = 1u << 18)
+inline int BuildIndexFor(const char* const* names, int count, size_t chunk = 1u << 18,
+                         size_t max_region = 96u << 20, size_t max_scan = 48u << 20)
 {
     std::vector<std::pair<std::string, uintptr_t> >& idx = detail::IndexRef();
     idx.clear();
     detail::StatsRef() = Stats();
     if (count <= 0) return 0;
 
+    // klass 结构和类名字符串都在几十 MB 的元数据区里，GB 级 GC 堆里不会有。
+    // 只扫小区域并按从小到大，命中即停，避免注入时扫掉几百 MB。
     std::vector<size_t> order;
     const std::vector<Region>& rs = detail::RegionsRef();
     for (size_t i = 0; i < rs.size(); ++i)
-        if (rs[i].size >= 0x1000) order.push_back(i);
+        if (rs[i].size >= 0x10000 && rs[i].size <= max_region) order.push_back(i);
     for (size_t i = 0; i + 1 < order.size(); ++i)
         for (size_t j = 0; j + 1 < order.size() - i; ++j)
-            if (rs[order[j]].size < rs[order[j + 1]].size)
+            if (rs[order[j]].size > rs[order[j + 1]].size)
             {
                 size_t t = order[j];
                 order[j] = order[j + 1];
                 order[j + 1] = t;
             }
+
 
     std::vector<uint8_t> buf;
     buf.resize(chunk);
@@ -199,6 +211,7 @@ inline int BuildIndexFor(const char* const* names, int count, size_t chunk = 1u 
             if (!n) break;
             if (!detail::Rd(r.base + off, buf.data(), n)) { off += n; continue; }
             detail::StatsRef().scanned_bytes += n;
+            if (detail::StatsRef().scanned_bytes >= max_scan) return nfound;  // 预算到顶就收工
             const size_t cnt = n / 8;
             const uint64_t* q = reinterpret_cast<const uint64_t*>(buf.data());
             for (size_t i = 0; i < cnt; ++i)
@@ -232,6 +245,64 @@ inline uintptr_t FindKlass(const char* name)
     return 0;
 }
 
+inline const std::vector<uintptr_t>& SingletonCandidates() { return detail::SingletonsRef(); }
+
+// 扫出全部 Singleton`1 泛型 klass。只扫元数据量级的区段，跳过 GB 级 GC 堆。
+inline int CollectSingletons(size_t chunk = 1u << 18, size_t max_region = 512u << 20)
+{
+    std::vector<uintptr_t>& out = detail::SingletonsRef();
+    out.clear();
+
+    std::vector<size_t> order;
+    const std::vector<Region>& rs = detail::RegionsRef();
+    for (size_t i = 0; i < rs.size(); ++i)
+        if (rs[i].size >= 0x1000 && rs[i].size <= max_region) order.push_back(i);
+    for (size_t i = 0; i + 1 < order.size(); ++i)
+        for (size_t j = 0; j + 1 < order.size() - i; ++j)
+            if (rs[order[j]].size < rs[order[j + 1]].size)
+            {
+                const size_t t = order[j];
+                order[j] = order[j + 1];
+                order[j + 1] = t;
+            }
+
+    std::vector<uint8_t> buf;
+    buf.resize(chunk);
+    std::unordered_set<uintptr_t> seen;
+    char name[96];
+
+    for (size_t oi = 0; oi < order.size(); ++oi)
+    {
+        const Region& r = rs[order[oi]];
+        size_t off = 0;
+        while (off + 8 <= r.size)
+        {
+            size_t n = r.size - off;
+            if (n > chunk) n = chunk;
+            n &= ~(size_t)7;
+            if (!n) break;
+            if (!detail::Rd(r.base + off, buf.data(), n)) { off += n; continue; }
+
+            const size_t cnt = n / 8;
+            const uint64_t* q = reinterpret_cast<const uint64_t*>(buf.data());
+            for (size_t i = 0; i < cnt; ++i)
+            {
+                const uintptr_t v = (uintptr_t)q[i];
+                if (!detail::InRegions(v)) continue;
+                if (!IsKlass(v, name, sizeof name)) continue;
+                if (std::strcmp(name, "Singleton`1") != 0) continue;
+                // 同一个 klass 会被大量引用，必须插入前去重，
+                // 否则候选表被重复项塞满后提前截断，后面的单例永远扫不到。
+                if (!seen.insert(v).second) continue;
+                if (out.size() >= 4096) return (int)out.size();
+                out.push_back(v);
+            }
+            off += n;
+        }
+    }
+    return (int)out.size();
+}
+
 struct Hit
 {
     uintptr_t mi = 0;
@@ -243,20 +314,20 @@ inline bool ResolveMethod(uintptr_t klass, uint32_t token, Hit* out, int limit =
 {
     if (!klass || !token) return false;
     uintptr_t tab = 0;
-    if (!detail::Rq(klass + 0x80, tab) || !detail::InRegions(tab)) return false;
+    if (!detail::Rq(klass + 0x60, tab) || !detail::InRegions(tab)) return false;
 
     for (int i = 0; i < limit; ++i)
     {
         uintptr_t p = 0;
         if (!detail::Rq(tab + (uintptr_t)i * 8, p) || !detail::InRegions(p)) break;
-        const uintptr_t mi = p - 8;
+        const uintptr_t mi = p;
         uintptr_t k2 = 0;
         uint32_t tok = 0;
-        if (!detail::Rq(mi + 0x10, k2)) break;
-        if (!detail::R32(mi + 0x30, tok)) break;
+        if (!detail::Rq(mi + 0x08, k2)) break;
+        if (!detail::R32(mi + 0x28, tok)) break;
         if (k2 != klass || tok != token) continue;
         uintptr_t fn = 0;
-        if (!detail::Rq(mi + 0x08, fn) || !fn) return false;
+        if (!detail::Rq(mi + 0x00, fn) || !fn) return false;
         if (out) { out->mi = mi; out->fn = fn; out->token = tok; }
         return true;
     }
@@ -308,23 +379,13 @@ inline int ScanQwords(uintptr_t target, HitFn cb, void* ctx, size_t chunk = 1u <
     std::vector<size_t> order;
     order.reserve(rs.size());
     for (size_t i = 0; i < rs.size(); ++i)
-        if (rs[i].size >= 8) order.push_back(i);
-    if (near_va)
-    {
-        std::vector<uint64_t> dist(order.size());
-        for (size_t i = 0; i < order.size(); ++i)
-        {
-            const uintptr_t b = rs[order[i]].base;
-            dist[i] = b > near_va ? (uint64_t)(b - near_va) : (uint64_t)(near_va - b);
-        }
-        for (size_t i = 0; i + 1 < order.size(); ++i)
-            for (size_t j = 0; j + 1 < order.size() - i; ++j)
-                if (dist[j] > dist[j + 1])
-                {
-                    const size_t t = order[j]; order[j] = order[j + 1]; order[j + 1] = t;
-                    const uint64_t d = dist[j]; dist[j] = dist[j + 1]; dist[j + 1] = d;
-                }
-    }
+        if (rs[i].size >= 8 && rs[i].size <= (64u << 20)) order.push_back(i);
+    for (size_t i = 0; i + 1 < order.size(); ++i)
+        for (size_t j = 0; j + 1 < order.size() - i; ++j)
+            if (rs[order[j]].size > rs[order[j + 1]].size)
+            {
+                const size_t t = order[j]; order[j] = order[j + 1]; order[j + 1] = t;
+            }
 
     uint64_t used = 0;
     for (size_t oi = 0; oi < order.size(); ++oi)

@@ -64,6 +64,17 @@ inline int HexDigit(char c)
     return -1;
 }
 
+// 热重载/二次注入时，游戏里可能还留着上一次的补丁字节；
+// 这些形态要当作「符号有效」，否则整个功能表会被判成 invalid。
+inline bool PatchedFormOk(const uint8_t* b, uint32_t n)
+{
+    if (n >= 3 && b[0] == 0xB0 && b[1] == 0x01 && b[2] == 0xC3) return true;
+    if (n >= 3 && b[0] == 0x31 && b[1] == 0xC0 && b[2] == 0xC3) return true;
+    if (n >= 12 && b[0] == 0x48 && b[1] == 0xB8 && b[10] == 0xFF && b[11] == 0xE0) return true;
+    if (n >= 2 && b[0] == 0x90 && b[1] == 0x90) return true;
+    return false;
+}
+
 inline bool PrologueOk(uintptr_t at, const char* hex, uint32_t n)
 {
     if (!hex || !hex[0] || !n) return true;
@@ -75,7 +86,8 @@ inline bool PrologueOk(uintptr_t at, const char* hex, uint32_t n)
         const int hi = HexDigit(hex[i * 2]);
         const int lo = HexDigit(hex[i * 2 + 1]);
         if (hi < 0 || lo < 0) return false;
-        if ((uint8_t)((hi << 4) | lo) != bytes[i]) return false;
+        if ((uint8_t)((hi << 4) | lo) != bytes[i])
+            return PatchedFormOk(bytes, n);
     }
     return true;
 }

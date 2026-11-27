@@ -1,4 +1,4 @@
-// 自动生成: python sdk/gen_names.py —— 请勿手改
+// 自动生成: sdk/rebuild_offsets_from_dump.py —— 请勿手改
 namespace ovp
 {
 
@@ -18,13 +18,13 @@ static const GenName kGenNames[SymCount] =
     { "Camera", 0x06000218u, 0x0u },
     { "BaseMonoMonster", 0x0600C4EEu, 0x0u },
     { "BaseMonoAvatar", 0x0600A5A6u, 0x0u },
-    { "MonoSkillButton", 0x0602927Au, 0x0u },
-    { "MonoSkillButton", 0x06029279u, 0x0u },
+    { "", 0x00000000u, 0x0u },
+    { "", 0x00000000u, 0x0u },
     { "BaseMonoAvatar", 0x0600A581u, 0x0u },
-    { "MHEMGJMNDJI", 0x06003B87u, 0x6Fu },
-    { "MHEMGJMNDJI", 0x06003B89u, 0x3Du },
-    { "MHEMGJMNDJI", 0x06003B88u, 0x41u },
-    { "MHEMGJMNDJI", 0x06003B8Au, 0x53Eu },
+    { "", 0x00000000u, 0x0u },
+    { "", 0x00000000u, 0x0u },
+    { "", 0x00000000u, 0x0u },
+    { "", 0x00000000u, 0x0u },
     { "BaseMonoAnimatorEntity", 0x0600B03Cu, 0x0u },
     { "BaseMonoAnimatorEntity", 0x0600B03Du, 0x0u },
     { "NavMesh", 0x0600002Du, 0x0u },
@@ -41,8 +41,8 @@ static const GenName kGenNames[SymCount] =
     { "MonoFukaNL", 0x0600ABD8u, 0x0u },
     { "MonoFukaNL_BattleY", 0x0600ABDBu, 0x0u },
     { "BaseMonoEntity", 0x0600B115u, 0x0u },
-    { "AvatarManager", 0x0600FB1Fu, 0x0u },
     { "", 0x00000000u, 0x0u },
+    { "BaseMonoAnimatorEntity", 0x0600B009u, 0x0u },
     { "SingletonManager", 0x0603320Cu, 0x0u },
     { "", 0x00000000u, 0x0u },
     { "", 0x00000000u, 0x0u },
@@ -55,6 +55,6 @@ static const GenName kGenNames[SymCount] =
     { "", 0x00000000u, 0x0u },
 };
 
-constexpr int kNameCount = 32;
+constexpr int kNameCount = 26;
 
 } // namespace ovp

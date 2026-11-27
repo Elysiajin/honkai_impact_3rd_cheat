@@ -7,7 +7,7 @@
 #include "imgui_internal.h"
 
 #include "../ov_mcp.h"
-#include "../NavBridge.h"
+#include "../TpBridge.h"
 
 #include <cstdio>
 #include <cstring>
@@ -166,9 +166,7 @@ void PageEsp()
         ToggleRow("绘制方框", &Cfg().esp_box);
         ToggleRow("显示名称", &Cfg().esp_name);
         ToggleRow("显示距离", &Cfg().esp_dist);
-        ToggleRow("队友框", &Cfg().esp_team);
         ToggleRow("宝箱/采集物", &Cfg().gadget_on);
-        ToggleRow("绘制NPC", &Cfg().npc_on);
         ToggleRow("顶部射线", &Cfg().ray_on);
     }
     CardEnd();
@@ -179,8 +177,8 @@ void PageEsp()
     {
         snprintf(buf, sizeof buf, "%d", St().esp_drawn);
         KeyValue("已绘制", buf);
-        snprintf(buf, sizeof buf, "%d / %d", St().gadget_n, St().npc_n);
-        KeyValue("宝箱 / NPC 缓存", buf);
+        snprintf(buf, sizeof buf, "%d", St().gadget_n);
+        KeyValue("宝箱缓存", buf);
         float ratio = St().monster_n > 0
             ? (float)St().esp_drawn / (float)St().monster_n : 0.0f;
         if (ratio > 1.0f) ratio = 1.0f;
@@ -226,93 +224,61 @@ void PageEsp()
                           Cfg().gadget_col,
                           ImGuiColorEditFlags_AlphaPreview | ImGuiColorEditFlags_NoSidePreview |
                           ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs);
-        ImGui::ColorEdit4("NPC",
-                          Cfg().npc_col,
-                          ImGuiColorEditFlags_AlphaPreview | ImGuiColorEditFlags_NoSidePreview |
-                          ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs);
     }
     CardEnd();
 
-    // 结束右列，寻路卡独占整行（宽 546，适配 566 内容区，避免被右边缘截断）
+    // 结束右列，传送卡独占整行（宽 546，适配 566 内容区，避免被右边缘截断）
     ImGui::EndGroup();
     ImGui::BeginGroup();
 
-    // ============================ 寻路 ============================
-    // 列出 ESP 扫描到的实体（渲染线程 g_nv 直接读），每行"寻路"按钮
-    // → ovnavui::request_to(x,y,z) → 游戏主线程 nav_tick 计算 NavMesh 路径。
-    static int  nav_cat   = 0;                       // 0=宝箱/采集 1=采集物 2=NPC 3=怪物
-    static char nav_filter[64] = "";                 // 名称过滤
-    // 卡片高度必须容纳状态区 + 列表 + 缓存行：BeginChildPos 强制 NoScrollbar，
-    // 高度不足会直接裁掉列表底部，导致末尾实体滚不到也点不到（旧值 560 不够）。
-    if (Card("寻路", ImVec2(546.0f, 880.0f)))
+    // ============================ 传送 ============================
+    // 只列出 ESP 已扫描到的实体并提供“传送”按钮。
+    static int  tp_cat   = 0;                       // 0=宝箱/采集 1=采集物 3=怪物
+    static char tp_filter[64] = "";                 // 名称过滤
+    if (Card("传送", ImVec2(546.0f, 880.0f)))
     {
-        const char* cats[] = { "宝箱/采集", "晶体采集物", "NPC", "怪物" };
-        for (int c = 0; c < 4; ++c) {
+        const char* cats[] = { "宝箱/采集", "晶体采集物", "怪物" };
+        const int   ids[]  = { 0, 1, 3 };
+        for (int c = 0; c < 3; ++c) {
             if (c) ImGui::SameLine(0.0f, 4.0f * S());
-            bool on = (nav_cat == c);
+            bool on = (tp_cat == ids[c]);
             if (on) ImGui::PushStyleColor(ImGuiCol_Button, C(theme::Accent, 0.55f));
-            if (ImGui::Button(cats[c], ImVec2((546.0f - 3 * 4.0f * S()) / 4.0f, 24.0f * S())))
-                nav_cat = c;
+            if (ImGui::Button(cats[c], ImVec2((546.0f - 2 * 4.0f * S()) / 3.0f, 24.0f * S())))
+                tp_cat = ids[c];
             if (on) ImGui::PopStyleColor();
         }
 
         ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputTextWithHint("##navfilter", "名称过滤（空=全部）", nav_filter, sizeof nav_filter);
+        ImGui::InputTextWithHint("##tpfilter", "名称过滤（空=全部）", tp_filter, sizeof tp_filter);
 
-        // ---- 状态区（放在列表上方，保证一定看得见）----
-        {
-            const char* msg = ovnavui::last_msg();
-            const bool ok = ovnavui::last_ok();
-            ImGui::PushStyleColor(ImGuiCol_Text, ok ? C(theme::Success) : C(theme::Danger));
-            ImGui::TextWrapped("结果：%s", msg && msg[0] ? msg : "尚未寻路");
+        const char* tpm = ovtpui::tp_text();
+        if (tpm && tpm[0]) {
+            ImGui::PushStyleColor(ImGuiCol_Text, C(theme::Cyan));
+            ImGui::TextWrapped("传送：%s", tpm);
             ImGui::PopStyleColor();
-
-            const char* tpm = ovnavui::tp_text();
-            if (tpm && tpm[0]) {
-                ImGui::PushStyleColor(ImGuiCol_Text, C(theme::Cyan));
-                ImGui::Text("传送：%s", tpm);
-                ImGui::PopStyleColor();
-            }
-
-            char dbg[256];
-            ovnavui::debug_info(dbg, (int)sizeof dbg);
-            ImGui::PushStyleColor(ImGuiCol_Text, C(theme::TextMid));
-            ImGui::TextWrapped("链路：%s", dbg);
-            ImGui::PopStyleColor();
-
-            const char* dg = ovnavui::diag_text();
-            if (dg && dg[0]) {
-                ImGui::PushStyleColor(ImGuiCol_Text, C(theme::Warning));
-                ImGui::TextWrapped("自检：%s", dg);
-                ImGui::PopStyleColor();
-            }
-
-            if (ImGui::Button("自检导航网格", ImVec2(140.0f * S(), 24.0f * S())))
-                ovnavui::diag();
-            ImGui::SameLine(0.0f, 8.0f * S());
-            ImGui::TextDisabled("（点一次：报告能否取到当前地图 NavMesh）");
+        } else {
+            ImGui::TextDisabled("传送：等待目标");
         }
 
-        ovnavui::Item items[256];
+        ovtpui::Item items[256];
         int n = 0;
-        ovnavui::fetch(nav_cat, items, 256, n);
+        ovtpui::fetch(tp_cat, items, 256, n);
 
-        // 按距离由近到远排序，序号与 ESP 画面标签共用 ovnavui::rank_of 的全局编号。
-        std::sort(items, items + n, [](const ovnavui::Item& a, const ovnavui::Item& b) {
-            const int ra = ovnavui::rank_of(a.p), rb = ovnavui::rank_of(b.p);
+        // 按距离由近到远排序，序号与 ESP 画面标签共用 ovtpui::rank_of 的全局编号。
+        std::sort(items, items + n, [](const ovtpui::Item& a, const ovtpui::Item& b) {
+            const int ra = ovtpui::rank_of(a.p), rb = ovtpui::rank_of(b.p);
             if (ra > 0 && rb > 0 && ra != rb) return ra < rb;
             if (a.dist != b.dist) return a.dist < b.dist;
             return std::strcmp(a.label[0] ? a.label : a.name,
                                b.label[0] ? b.label : b.name) < 0;
         });
 
-        // 列表高度取剩余空间（预留缓存行），避免固定高度与卡片其他内容叠加后溢出。
-        const float navListH = ImMax(120.0f * S(), ImGui::GetContentRegionAvail().y - 34.0f * S());
-        ImGui::BeginChild("##navlist", ImVec2(0, navListH), true);
+        const float tpListH = ImMax(160.0f * S(), ImGui::GetContentRegionAvail().y - 34.0f * S());
+        ImGui::BeginChild("##tplist", ImVec2(0, tpListH), true);
         int shown = 0;
         for (int i = 0; i < n; ++i) {
-            const ovnavui::Item& it = items[i];
-            if (nav_filter[0]) {
+            const ovtpui::Item& it = items[i];
+            if (tp_filter[0]) {
                 // 大小写不敏感子串匹配（name 优先，其次可读名）
                 auto contains = [](const char* hay, const char* needle) {
                     if (!needle[0]) return true;
@@ -323,22 +289,19 @@ void PageEsp()
                     }
                     return false;
                 };
-                if (!contains(it.name, nav_filter) && !contains(it.label, nav_filter)) continue;
+                if (!contains(it.name, tp_filter) && !contains(it.label, tp_filter)) continue;
             }
             if (++shown > 100) break;   // 列表上限
             const char* nm = it.label[0] ? it.label : (it.name[0] ? it.name : "(未命名)");
-            const int rk = ovnavui::rank_of(it.p);
+            const int rk = ovtpui::rank_of(it.p);
             char row[192];
             snprintf(row, sizeof row, "[%d] %s %.0fm", rk > 0 ? rk : shown, nm, it.dist);
             ImGui::PushID(i);
-            const bool pressed = ImGui::Button("寻路", ImVec2(46.0f * S(), 20.0f * S()));
-            ImGui::SameLine(0.0f, 4.0f * S());
-            const bool tp = ImGui::Button("传送", ImVec2(46.0f * S(), 20.0f * S()));
+            const bool tp = ImGui::Button("传送", ImVec2(52.0f * S(), 20.0f * S()));
             ImGui::SameLine(0.0f, 8.0f * S());
             ImGui::TextUnformatted(row);
             ImGui::PopID();
-            if (pressed) ovnavui::request_to(it.x, it.y, it.z);
-            if (tp) ovnavui::request_teleport(it.x, it.y, it.z);
+            if (tp) ovtpui::request_teleport(it.x, it.y, it.z);
         }
         if (n == 0) ImGui::TextDisabled("（无数据：等 ESP 扫描出该类对象，或切换类别）");
         ImGui::EndChild();

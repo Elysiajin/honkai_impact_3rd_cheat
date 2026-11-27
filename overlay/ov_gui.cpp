@@ -22,8 +22,7 @@
 
 #include "ov_data.h"
 #include "ov_native.h"
-#include "ov_nav.h"
-#include "NavBridge.h"
+#include "TpBridge.h"
 #include "ov_act.h"
 #include "ov_lua.h"
 #include "ov_mcp.h"
@@ -122,7 +121,7 @@ static bool mcp_lua_eval(const std::string& code, std::string& out, std::string&
         err = g_lua.msg;
         return false;
     }
-    if (g_lua.n <= 0 && !ovlua::find_state_registry(g_data, g_lua))
+    if (g_lua.n <= 0 && !ovlua::resolve(g_data, g_lua))
     {
         err = "没有 LuaState，请先在 Lua 控制台点“刷新状态”";
         return false;
@@ -299,8 +298,6 @@ static void tick_game_thread() {
     }
     if (g_data_ready) {
         ovn::refresh(g_data, g_game_nv);
-        // 寻路：消费 nav_req()，在主线程调 NavMesh（Triangulation+A*）
-        ovnav::nav_tick(g_data, g_game_nv);
         if (cfg.god != g_god_state.load()) {
             if (ovn::god_mode(g_data, cfg.god)) g_god_state = cfg.god;
         }
@@ -311,7 +308,7 @@ static void tick_game_thread() {
             ovn::damage_hook(g_data, cfg.dmg_on, cfg.dmg_mult, cfg.god, cfg.ohk);
         if (cfg.atk_on) ovn::attack_speed(g_data, g_game_nv, true, cfg.atk_mult);
         else if (ovn::atk_speed_applied()) ovn::attack_speed(g_data, g_game_nv, false, 1.0f);
-        if (rq.kill_all && g_game_nv.cam_ok && !g_game_nv.avatars.empty())
+        if (rq.kill_all)
             st.kill_count += (int)ovn::kill_all(g_data, g_game_nv);
     } else {
         g_game_nv = ovn::State();
@@ -367,7 +364,6 @@ static void tick_game_thread() {
     st.avatar_n = (int)g_game_nv.avatars.size();
     st.monster_n = (int)g_game_nv.monsters.size();
     st.gadget_n = (int)g_game_nv.gadgets.size();
-    st.npc_n = (int)g_game_nv.npcs.size();
     st.gadget_list_n = g_game_nv.gadget_list_n;
     st.gadget_cap_n = g_game_nv.gadget_cap_n;
     st.gadget_read_n = g_game_nv.gadget_read_n;
@@ -385,18 +381,36 @@ static void tick_game_thread() {
     st.data_ready = g_data_ready;
     st.class_count = g_data.count;
     st.ua = g_data.ua;
-    st.god_applied = g_god_state.load() && ovn::god_true_applied();
+    st.god_applied = g_god_state.load() && (ovn::behit_applied() || ovn::god_true_applied());
     st.inf_sp_applied = ovn::sp_applied();
     st.no_cd_applied = ovn::cd_applied();
     st.crit_applied = ovn::crit_applied();
     st.dmg_applied = ovn::dmg_applied();
     st.ohk_applied = ovn::ohk_applied();
     st.atk_speed_applied = ovn::atk_speed_applied();
+    st.dmg_hits = ovn::dmg_hits();
+    st.dmg_mon_hits = ovn::dmg_mon_hits();
+    st.local_avatar = g_game_nv.local_avatar;
+    st.player_from_cam = g_game_nv.player_from_cam;
 
+    char diag[256] = { 0 };
+    snprintf(diag, sizeof diag,
+             "resolve=%d avMgr=%p moMgr=%p raw=%d/%d idx=%ums",
+             (int)ovl::Stats().resolved,
+             (void*)g_game_nv.avatar_mgr, (void*)g_game_nv.monster_mgr,
+             g_game_nv.avatar_raw, g_game_nv.monster_raw,
+             (unsigned)ovl::Stats().ms);
+    snprintf(diag + strlen(diag), sizeof diag - strlen(diag),
+             " av=+40/%d mo=+18/%d dmg=%u/%u/%u la=%p%s",
+             (int)g_game_nv.avatars.size(), (int)g_game_nv.monsters.size(),
+             (unsigned)ovn::dmg_mon_hits(), (unsigned)ovn::dmg_ply_hits(),
+             (unsigned)ovn::dmg_hits(),
+             (void*)g_game_nv.local_avatar,
+             g_game_nv.player_from_cam ? " cam" : "");
     ovmcp::UpdateGameStatus(g_data.ua, g_data_ready,
                             (int)g_game_nv.avatars.size(),
                             (int)g_game_nv.monsters.size(),
-                            g_game_nv.cam_ok, g_game_nv.msg);
+                            g_game_nv.cam_ok, g_game_nv.msg, diag);
 
     st.act_ready = g_game_act.ready;
     st.act_in = g_game_act.in_act;
@@ -638,22 +652,6 @@ static void smooth_apply(uintptr_t key, float& x, float& y, float& w, float& h,
     x = b.x; y = b.y; w = b.w; h = b.h;
 }
 
-static int find_local_avatar(const ovn::State& s) {
-    if (s.avatars.empty()) return -1;
-    if (s.avatars.size() == 1) return 0;
-    int best = -1;
-    float bd = 1e18f;
-    for (int i = 0; i < (int)s.avatars.size(); ++i) {
-        const ovn::Ent& a = s.avatars[(size_t)i];
-        const float dx = a.x - s.cam_pos[0];
-        const float dy = a.y - s.cam_pos[1];
-        const float dz = a.z - s.cam_pos[2];
-        const float d = dx * dx + dy * dy + dz * dz;
-        if (d < bd) { bd = d; best = i; }
-    }
-    return best;
-}
-
 static inline float dist_between(const float p[3], float x, float y, float z) {
     const float dx = x - p[0], dy = y - p[1], dz = z - p[2];
     return sqrtf(dx * dx + dy * dy + dz * dz);
@@ -664,64 +662,10 @@ static void draw_box(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col) {
     dl->AddRect(a, b, col, 0, 0, 1.5f);
 }
 
-// 寻路路径绘制：读 ovnav::nav_state()，世界拐点 w2s 后画折线 + 终点标记。
-// 读的是游戏线程写入的 NavState（v1 接受可能的一帧竞争，最多画错一帧不崩）。
-static void draw_nav() {
-    const ovn::State& s = g_nv;
-    if (!s.cam_ok || !s.vp_valid) return;
-    const ovnav::NavState& ns = ovnav::nav_state();
-    if (ns.pts.size() < 2) return;
-
-    const ImVec2 ds = ImGui::GetIO().DisplaySize;
-    const float sw = (ds.x > 1.0f) ? ds.x : s.w;
-    const float sh = (ds.y > 1.0f) ? ds.y : s.h;
-    if (sw <= 1.0f || sh <= 1.0f) return;
-
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    const ImU32 col_path = IM_COL32(120, 200, 255, 230);
-    const ImU32 col_path_bg = IM_COL32(0, 40, 80, 170);
-    const ImU32 col_node = IM_COL32(255, 220, 90, 235);
-    const ImU32 col_end = IM_COL32(255, 90, 90, 235);
-
-    bool any = false;
-    ImVec2 prev{};
-    char label[64];
-    for (size_t i = 0; i < ns.pts.size(); ++i) {
-        const ovnav::Vec3& p = ns.pts[i];
-        float sx = 0, sy = 0;
-        if (!ovn::w2s(s.vp, p.x, p.y, p.z, s.w, s.h, sx, sy)) continue;
-        if (s.w > 1.0f && s.h > 1.0f && (s.w != sw || s.h != sh)) {
-            sx *= sw / s.w;
-            sy *= sh / s.h;
-        }
-        const ImVec2 cur(sx, sy);
-        if (any) {
-            dl->AddLine(prev, cur, col_path_bg, 4.0f);
-            dl->AddLine(prev, cur, col_path, 1.8f);
-        }
-        dl->AddCircleFilled(cur, 3.0f, col_node);
-        if (i + 1 == ns.pts.size()) {
-            dl->AddCircle(cur, 8.0f, col_end, 0, 2.5f);
-            snprintf(label, sizeof label, "终点 %.0fm",
-                     sqrtf((p.x - (s.player_ok ? s.player_pos[0] : s.cam_pos[0])) *
-                           (p.x - (s.player_ok ? s.player_pos[0] : s.cam_pos[0])) +
-                           (p.z - (s.player_ok ? s.player_pos[2] : s.cam_pos[2])) *
-                           (p.z - (s.player_ok ? s.player_pos[2] : s.cam_pos[2]))));
-            dl->AddText(ImVec2(cur.x + 10, cur.y - 8), col_end, label);
-        }
-        prev = cur;
-        any = true;
-    }
-    if (any && ns.msg[0]) {
-        // 状态行：路径信息（拐点数/网格规模/耗时）
-        dl->AddText(ImVec2(18.0f, sh * 0.5f), IM_COL32(120, 200, 255, 200), ns.msg);
-    }
-}
-
-// ============================ 寻路 UI 桥（渲染线程调用） ============================
-// PageEsp "寻路"卡片经 NavBridge.h 取实体列表/触发请求；实现放这里因为
+// ============================ 传送 UI 桥（渲染线程调用） ============================
+// PageEsp “传送”卡片经 TpBridge.h 取实体列表/触发请求；实现放这里因为
 // g_nv（渲染线程持有的完整实体状态）是本文件 static。
-namespace ovnavui {
+namespace ovtpui {
 
 static void rebuild_ranks(const ovn::State& s, const float* ref);
 
@@ -730,11 +674,10 @@ bool fetch(int cat, Item* out, int cap, int& n) {
     const ovn::State& s = g_nv;
     // 列表与画面共用序号表：即使 ESP 关闭也能保证列表里有稳定编号。
     rebuild_ranks(s, s.player_pos);
-    // cat: 0=宝箱/采集(gadgets) 1=晶体采集物(props) 2=NPC 3=怪物
+    // cat: 0=宝箱/采集(gadgets) 1=晶体采集物(props) 3=怪物
     const std::vector<ovn::Ent>* list = nullptr;
     if (cat == 0) list = &s.gadgets;
     else if (cat == 1) list = &s.props;
-    else if (cat == 2) list = &s.npcs;
     else if (cat == 3) list = &s.monsters;
     if (!list) return false;
     for (const ovn::Ent& e : *list) {
@@ -752,10 +695,6 @@ bool fetch(int cat, Item* out, int cap, int& n) {
     return true;
 }
 
-void request_to(float x, float y, float z) {
-    ovnav::nav_request_to({ x, y, z });
-}
-
 void request_teleport(float x, float y, float z) {
     ovn::request_teleport(x, y, z);
 }
@@ -764,36 +703,9 @@ const char* tp_text() {
     return ovn::tp_msg();
 }
 
-const char* last_msg() {
-    return ovnav::nav_state().msg;
-}
-
-bool last_ok() {
-    return ovnav::nav_state().ok;
-}
-
-void diag() {
-    ovnav::nav_diag_req().store(true);
-}
-
-const char* diag_text() {
-    return ovnav::nav_state().diag;
-}
-
-void debug_info(char* out, int cap) {
-    const ovnav::NavState& ns = ovnav::nav_state();
-    snprintf(out, (size_t)cap,
-             "请求 %u / 主线程消费 %u / 阶段 %d / 符号 %08X%s / 玩家 %s / 网格 %s(%d,%d) / %ums",
-             ns.req_n, ns.tick_n, (int)ns.stage, ns.rva_tri,
-             ns.sym_ok ? "✓" : "✗",
-             ns.player_ok ? "✓" : "✗",
-             ns.tri_ok ? "✓" : "✗", ns.tri_v, ns.tri_i / 3, ns.last_ms);
-}
-
 // ---- 统一绘制序号 ----
-// 每帧由 draw_esp 调用 rebuild_ranks：把所有可寻路实体（怪物/宝箱/采集/NPC）
-// 按距玩家距离升序编号，画面 ESP 标签与寻路列表用同一张表，做到 "[n]" 一一对应。
-// 队友不参与编号（列表里没有、也不能寻路）。
+// 每帧由 draw_esp 调用 rebuild_ranks：把怪物/宝箱/采集物按距玩家距离升序编号，
+// 画面 ESP 标签与传送列表用同一张表，做到 "[n]" 一一对应。
 static std::unordered_map<uintptr_t, int> g_draw_rank;
 
 static void rebuild_ranks(const ovn::State& s, const float* ref) {
@@ -809,7 +721,6 @@ static void rebuild_ranks(const ovn::State& s, const float* ref) {
     for (const auto& e : s.monsters) add(e);
     for (const auto& e : s.gadgets)  add(e);
     for (const auto& e : s.props)    add(e);
-    for (const auto& e : s.npcs)     add(e);
 
     std::sort(v.begin(), v.end(), [](const Ranked& a, const Ranked& b) {
         if (a.d != b.d) return a.d < b.d;
@@ -823,7 +734,7 @@ int rank_of(uintptr_t p) {
     return it == g_draw_rank.end() ? 0 : it->second;
 }
 
-} // namespace ovnavui
+} // namespace ovtpui
 
 static bool project_ent(const ovn::State& s, float sw, float sh, float x, float y, float z, float h,
                         float& bx, float& by, float& bw, float& bh) {
@@ -870,20 +781,21 @@ static void draw_esp(float dt) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImU32 col = ImGui::ColorConvertFloat4ToU32(
         ImVec4(cfg.esp_col[0], cfg.esp_col[1], cfg.esp_col[2], cfg.esp_col[3]));
-    const ImU32 col_team = IM_COL32(90, 220, 140, 235);
     const ImU32 col_gadget = ImGui::ColorConvertFloat4ToU32(
         ImVec4(cfg.gadget_col[0], cfg.gadget_col[1], cfg.gadget_col[2], cfg.gadget_col[3]));
-    const ImU32 col_npc = ImGui::ColorConvertFloat4ToU32(
-        ImVec4(cfg.npc_col[0], cfg.npc_col[1], cfg.npc_col[2], cfg.npc_col[3]));
     const ImU32 col_chest = IM_COL32(255, 199, 92, 240);
     const ImU32 col_collect = IM_COL32(110, 220, 255, 240);
     const ImU32 col_challenge = IM_COL32(255, 140, 90, 240);
     const ImU32 col_game = IM_COL32(190, 150, 255, 240);
+    const ImU32 col_teleport = IM_COL32(90, 255, 190, 240);
+    const ImU32 col_entrance = IM_COL32(160, 255, 120, 240);
     auto pjms_col = [&](const ovn::Ent& e, ImU32 base) {
         if (e.cat == 0) return col_chest;
         if (e.cat == 1) return col_collect;
         if (e.cat == 2) return col_challenge;
         if (e.cat == 3) return col_game;
+        if (e.cat == 4) return col_teleport;
+        if (e.cat == 7) return col_entrance;
         return base;
     };
 
@@ -899,16 +811,11 @@ static void draw_esp(float dt) {
     if (!f) f = ui::Fonts().small ? ui::Fonts().small : ImGui::GetFont();
     const float fsz = f ? (cfg.esp_font > 1.0f ? cfg.esp_font : (f ? f->FontSize : 20.0f)) : 20.0f;
 
-    const int li = find_local_avatar(s);
-    const bool avatar_pos_ok = li >= 0 &&
-        (fabsf(s.avatars[(size_t)li].x) + fabsf(s.avatars[(size_t)li].y) +
-         fabsf(s.avatars[(size_t)li].z)) > 0.01f;
-    const float* ref = s.player_ok ? s.player_pos :
-        (avatar_pos_ok ? &s.avatars[(size_t)li].x : s.cam_pos);
+    const float* ref = s.player_ok ? s.player_pos : s.cam_pos;
     const bool ref_ok = (fabsf(ref[0]) + fabsf(ref[1]) + fabsf(ref[2])) > 0.01f;
 
-    // 每帧重建统一序号表：ESP 画面标签与寻路列表共用同一编号。
-    ovnavui::rebuild_ranks(s, ref);
+    // 每帧重建统一序号表：ESP 画面标签与传送列表共用同一编号。
+    ovtpui::rebuild_ranks(s, ref);
 
     smooth_prune(now);
 
@@ -927,6 +834,7 @@ static void draw_esp(float dt) {
     };
 
     for (const auto& e : s.monsters) {
+        if (!e.pos_ok) continue;
         float bx = 0, by = 0, bw = 0, bh = 0;
         if (!project_ent(s, sw, sh, e.x, e.y, e.z, esp_h, bx, by, bw, bh)) continue;
 
@@ -942,7 +850,7 @@ static void draw_esp(float dt) {
         if (show_box) draw_box(dl, a, b, col);
         if (show_name) {
             const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
-            const int rk = ovnavui::rank_of(e.p);
+            const int rk = ovtpui::rank_of(e.p);
             if (rk > 0) {
                 if (show_dist) snprintf(line, sizeof line, "[%d] %s %.0fm", rk, nm, dist);
                 else           snprintf(line, sizeof line, "[%d] %s", rk, nm);
@@ -964,42 +872,9 @@ static void draw_esp(float dt) {
         if (++drawn >= 400) break;
     }
 
-    if (cfg.esp_team && s.avatars.size() > 1) {
-        for (int i = 0; i < (int)s.avatars.size(); ++i) {
-            if (i == li) continue;
-            const ovn::Ent& e = s.avatars[(size_t)i];
-            float bx = 0, by = 0, bw = 0, bh = 0;
-            if (!project_ent(s, sw, sh, e.x, e.y, e.z, esp_h, bx, by, bw, bh)) continue;
-
-            const float dist = dist_between(ref, e.x, e.y, e.z);
-            if (show_dist && dist > maxd) continue;
-
-            float x = bx, y = by, w = bw, h = bh;
-            smooth_apply(e.p, x, y, w, h, now, dt, smooth);
-            ImVec2 a(x - w * 0.5f, y), b(x + w * 0.5f, y + h);
-            if (b.x < -32.0f || a.x > sw + 32.0f || b.y < -32.0f || a.y > sh + 32.0f) continue;
-
-            ray_to(a, b);
-            if (show_box) draw_box(dl, a, b, col_team);
-            if (show_name) {
-                if (show_dist) snprintf(line, sizeof line, "%s  %.0fm", e.name.c_str(), dist);
-                else           snprintf(line, sizeof line, "%s", e.name.c_str());
-                const ImVec2 ts = f->CalcTextSizeA(fsz, FLT_MAX, 0.0f, line, nullptr);
-                const float tx = (a.x + b.x) * 0.5f - ts.x * 0.5f;
-                const float ty = a.y - ts.y - cfg.esp_off;
-                const ImU32 sh = IM_COL32(0, 0, 0, 200);
-                dl->AddText(f, fsz, ImVec2(tx - 1.0f, ty), sh, line);
-                dl->AddText(f, fsz, ImVec2(tx + 1.0f, ty), sh, line);
-                dl->AddText(f, fsz, ImVec2(tx, ty - 1.0f), sh, line);
-                dl->AddText(f, fsz, ImVec2(tx, ty + 1.0f), sh, line);
-                dl->AddText(f, fsz, ImVec2(tx, ty), col_team, line);
-            }
-            if (++drawn >= 400) break;
-        }
-    }
-
     auto draw_pjms_list = [&](const std::vector<ovn::Ent>& list, ImU32 color, float height) {
         for (const auto& e : list) {
+            if (!e.pos_ok) continue;
             float bx = 0, by = 0, bw = 0, bh = 0;
             if (!project_ent(s, sw, sh, e.x, e.y, e.z, height, bx, by, bw, bh)) continue;
             const float dist = dist_between(ref, e.x, e.y, e.z);
@@ -1014,7 +889,7 @@ static void draw_esp(float dt) {
             if (show_box) draw_box(dl, a, b, cc);
             if (show_name) {
                 const char* nm = e.label.empty() ? e.name.c_str() : e.label.c_str();
-                const int rk = ovnavui::rank_of(e.p);
+                const int rk = ovtpui::rank_of(e.p);
                 if (rk > 0) {
                     if (show_dist) snprintf(line, sizeof line, "[%d] %s %.0fm", rk, nm, dist);
                     else           snprintf(line, sizeof line, "[%d] %s", rk, nm);
@@ -1037,7 +912,6 @@ static void draw_esp(float dt) {
     };
     if (cfg.gadget_on) draw_pjms_list(s.gadgets, col_gadget, 0.8f);
     if (cfg.gadget_on) draw_pjms_list(s.props, col_gadget, 0.8f);
-    if (cfg.npc_on)    draw_pjms_list(s.npcs, col_npc, esp_h);
 
     ui::St().esp_drawn = drawn;
 }
@@ -1130,11 +1004,10 @@ static void render_overlay(IDXGISwapChain* sc) {
 
             update_fps();
 
-            // 菜单打开时先铺蓝绿渐变背景，ESP / 寻路线仍绘制在其上方。
+            // 菜单打开时先铺蓝绿渐变背景，ESP / 实体标签仍绘制在其上方。
             if (vis) ui::glass::Backdrop(ImGui::GetBackgroundDrawList(), io.DisplaySize,
                                          ui::Cfg().backdrop_alpha, (float)ImGui::GetTime());
             draw_esp(dt);
-            draw_nav();
             if (vis) ui::AppFrame(dt);
             g_ui_visible = ui::AppVisible();
 
